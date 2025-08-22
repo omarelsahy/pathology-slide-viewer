@@ -28,25 +28,96 @@ const dziDir = path.join(__dirname, 'public', 'dzi');
 function convertSvsToDzi(svsPath, outputName) {
   return new Promise((resolve, reject) => {
     const outputPath = path.join(dziDir, outputName);
+    const startTime = Date.now();
+    
+    // Get original file stats
+    const originalStats = fs.statSync(svsPath);
+    const originalSize = originalStats.size;
     
     // Using VIPS command to convert SVS to DZI
     const command = `vips dzsave "${svsPath}" "${outputPath}" --layout dz --suffix .jpg[Q=90] --overlap 1 --tile-size 256`;
     
-    console.log(`Converting ${svsPath} to DZI format...`);
+    console.log(`\n=== CONVERSION STARTED ===`);
+    console.log(`File: ${path.basename(svsPath)}`);
+    console.log(`Original size: ${(originalSize / 1024 / 1024 / 1024).toFixed(2)} GB`);
+    console.log(`Start time: ${new Date(startTime).toLocaleTimeString()}`);
     console.log(`Command: ${command}`);
+    console.log(`========================\n`);
     
     exec(command, (error, stdout, stderr) => {
+      const endTime = Date.now();
+      const duration = endTime - startTime;
+      
       if (error) {
-        console.error(`Conversion error: ${error}`);
+        console.error(`\n=== CONVERSION FAILED ===`);
+        console.error(`Error: ${error}`);
+        console.error(`Duration: ${(duration / 1000).toFixed(1)} seconds`);
+        console.error(`========================\n`);
+        
         // Try alternative method with Sharp
-        convertWithSharp(svsPath, outputName)
+        convertWithSharp(svsPath, outputName, startTime, originalSize)
           .then(resolve)
           .catch(reject);
         return;
       }
       
-      console.log(`Conversion completed: ${outputPath}.dzi`);
-      resolve(`${outputPath}.dzi`);
+      // Calculate conversion metrics
+      const dziPath = `${outputPath}.dzi`;
+      const tilesDir = `${outputPath}_files`;
+      
+      // Get converted file stats
+      let convertedSize = 0;
+      let fileCount = 0;
+      
+      try {
+        if (fs.existsSync(dziPath)) {
+          convertedSize += fs.statSync(dziPath).size;
+          fileCount++;
+        }
+        
+        if (fs.existsSync(tilesDir)) {
+          const walkDir = (dir) => {
+            const files = fs.readdirSync(dir);
+            files.forEach(file => {
+              const filePath = path.join(dir, file);
+              const stat = fs.statSync(filePath);
+              if (stat.isDirectory()) {
+                walkDir(filePath);
+              } else {
+                convertedSize += stat.size;
+                fileCount++;
+              }
+            });
+          };
+          walkDir(tilesDir);
+        }
+      } catch (err) {
+        console.error('Error calculating converted file size:', err);
+      }
+      
+      console.log(`\n=== CONVERSION COMPLETED ===`);
+      console.log(`File: ${path.basename(svsPath)}`);
+      console.log(`Duration: ${(duration / 1000).toFixed(1)} seconds (${(duration / 60000).toFixed(1)} minutes)`);
+      console.log(`Original size: ${(originalSize / 1024 / 1024 / 1024).toFixed(2)} GB`);
+      console.log(`Converted size: ${(convertedSize / 1024 / 1024 / 1024).toFixed(2)} GB`);
+      console.log(`Size change: ${convertedSize > originalSize ? '+' : ''}${(((convertedSize - originalSize) / originalSize) * 100).toFixed(1)}%`);
+      console.log(`Files created: ${fileCount.toLocaleString()}`);
+      console.log(`Processing rate: ${(originalSize / 1024 / 1024 / (duration / 1000)).toFixed(1)} MB/second`);
+      console.log(`End time: ${new Date(endTime).toLocaleTimeString()}`);
+      console.log(`============================\n`);
+      
+      resolve({
+        dziPath,
+        metrics: {
+          duration,
+          originalSize,
+          convertedSize,
+          fileCount,
+          processingRate: originalSize / 1024 / 1024 / (duration / 1000),
+          startTime,
+          endTime
+        }
+      });
     });
   });
 }
