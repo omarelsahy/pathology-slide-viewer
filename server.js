@@ -4,6 +4,7 @@ const fs = require('fs');
 const cors = require('cors');
 const WebSocket = require('ws');
 const { exec } = require('child_process');
+const AutoProcessor = require('./autoProcessor');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -299,6 +300,36 @@ app.post('/api/convert/:filename', async (req, res) => {
   }
 });
 
+// Auto-processor control endpoints
+app.get('/api/auto-processor/status', (req, res) => {
+  if (!autoProcessor) {
+    return res.status(503).json({ error: 'Auto-processor not initialized' });
+  }
+  
+  res.json({
+    status: autoProcessor.getStatus(),
+    queue: autoProcessor.getQueue()
+  });
+});
+
+app.post('/api/auto-processor/enable', (req, res) => {
+  if (!autoProcessor) {
+    return res.status(503).json({ error: 'Auto-processor not initialized' });
+  }
+  
+  autoProcessor.enable();
+  res.json({ message: 'Auto-processor enabled', status: autoProcessor.getStatus() });
+});
+
+app.post('/api/auto-processor/disable', (req, res) => {
+  if (!autoProcessor) {
+    return res.status(503).json({ error: 'Auto-processor not initialized' });
+  }
+  
+  autoProcessor.disable();
+  res.json({ message: 'Auto-processor disabled', status: autoProcessor.getStatus() });
+});
+
 // Create HTTP server
 const server = app.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
@@ -310,9 +341,112 @@ const wss = new WebSocket.Server({ server });
 wss.on('connection', (ws) => {
   console.log('New client connected');
   
+  // Send current auto-processor status to new clients
+  if (autoProcessor) {
+    ws.send(JSON.stringify({
+      type: 'auto_processor_status',
+      status: autoProcessor.getStatus(),
+      queue: autoProcessor.getQueue()
+    }));
+  }
+  
   ws.on('close', () => {
     console.log('Client disconnected');
   });
 });
 
-module.exports = { app, server };
+// Initialize Auto Processor
+const autoProcessor = new AutoProcessor(slidesDir, convertSvsToDzi, {
+  enabled: true,
+  maxRetries: 3,
+  retryDelay: 5000
+});
+
+// Auto Processor Event Handlers
+autoProcessor.on('fileDetected', (data) => {
+  console.log(`Auto-processor detected new file: ${data.fileName}`);
+  broadcastToClients({
+    type: 'auto_file_detected',
+    fileName: data.fileName,
+    baseName: data.baseName
+  });
+});
+
+autoProcessor.on('processingStarted', (fileInfo) => {
+  console.log(`Auto-processing started: ${fileInfo.fileName}`);
+  broadcastToClients({
+    type: 'auto_processing_started',
+    fileName: fileInfo.fileName,
+    baseName: fileInfo.baseName
+  });
+});
+
+autoProcessor.on('processingCompleted', (data) => {
+  console.log(`Auto-processing completed: ${data.fileInfo.fileName}`);
+  broadcastToClients({
+    type: 'auto_conversion_complete',
+    fileName: data.fileInfo.baseName,
+    dziPath: `/dzi/${data.fileInfo.baseName}.dzi`,
+    metrics: data.result.metrics
+  });
+});
+
+autoProcessor.on('processingFailed', (data) => {
+  console.log(`Auto-processing failed: ${data.fileInfo.fileName}`);
+  broadcastToClients({
+    type: 'auto_conversion_error',
+    fileName: data.fileInfo.baseName,
+    error: data.error.message
+  });
+});
+
+autoProcessor.on('fileRetry', (data) => {
+  console.log(`Auto-processing retry: ${data.fileInfo.fileName} (${data.retryCount}/${data.maxRetries})`);
+  broadcastToClients({
+    type: 'auto_processing_retry',
+    fileName: data.fileInfo.baseName,
+    retryCount: data.retryCount,
+    maxRetries: data.maxRetries
+  });
+});
+
+autoProcessor.on('queueUpdated', (data) => {
+  broadcastToClients({
+    type: 'auto_queue_updated',
+    queueLength: data.queueLength
+  });
+});
+
+// Helper function to broadcast to all WebSocket clients
+function broadcastToClients(message) {
+  wss.clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify(message));
+    }
+  });
+}
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+  console.log('\nShutting down server...');
+  if (autoProcessor) {
+    autoProcessor.destroy();
+  }
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGTERM', () => {
+  console.log('\nShutting down server...');
+  if (autoProcessor) {
+    autoProcessor.destroy();
+  }
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
+});
+
+module.exports = { app, server, autoProcessor };
