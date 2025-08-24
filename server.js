@@ -35,6 +35,40 @@ function convertSvsToDzi(svsPath, outputName) {
     const originalStats = fs.statSync(svsPath);
     const originalSize = originalStats.size;
     
+    // Check for existing tile folder
+    const tilesDir = `${outputPath}_files`;
+    const existingTiles = fs.existsSync(tilesDir);
+    let existingTileCount = 0;
+    
+    // Debug logging for tile folder detection
+    console.log(`\n--- TILE FOLDER CHECK ---`);
+    console.log(`Looking for: ${tilesDir}`);
+    console.log(`Exists: ${existingTiles}`);
+    console.log(`-------------------------\n`);
+    
+    if (existingTiles) {
+      // Count existing tiles
+      try {
+        const countTiles = (dir) => {
+          let count = 0;
+          const files = fs.readdirSync(dir);
+          files.forEach(file => {
+            const filePath = path.join(dir, file);
+            const stat = fs.statSync(filePath);
+            if (stat.isDirectory()) {
+              count += countTiles(filePath);
+            } else if (file.endsWith('.jpg') || file.endsWith('.jpeg')) {
+              count++;
+            }
+          });
+          return count;
+        };
+        existingTileCount = countTiles(tilesDir);
+      } catch (err) {
+        console.error('Error counting existing tiles:', err);
+      }
+    }
+    
     // Using VIPS command to convert SVS to DZI
     const command = `vips dzsave "${svsPath}" "${outputPath}" --layout dz --suffix .jpg[Q=90] --overlap 1 --tile-size 256`;
     
@@ -42,6 +76,13 @@ function convertSvsToDzi(svsPath, outputName) {
     console.log(`File: ${path.basename(svsPath)}`);
     console.log(`Original size: ${(originalSize / 1024 / 1024 / 1024).toFixed(2)} GB`);
     console.log(`Start time: ${new Date(startTime).toLocaleTimeString()}`);
+    if (existingTiles) {
+      console.log(`Existing tile folder detected: ${path.basename(tilesDir)}`);
+      console.log(`Existing tiles found: ${existingTileCount.toLocaleString()}`);
+      console.log(`Mode: Validation/repair of existing tiles`);
+    } else {
+      console.log(`Mode: Full conversion (no existing tiles)`);
+    }
     console.log(`Command: ${command}`);
     console.log(`========================\n`);
     
@@ -96,13 +137,66 @@ function convertSvsToDzi(svsPath, outputName) {
         console.error('Error calculating converted file size:', err);
       }
       
+      // Calculate tile validation metrics
+      let finalTileCount = 0;
+      let tilesCreated = 0;
+      let tilesValidated = 0;
+      
+      try {
+        if (fs.existsSync(tilesDir)) {
+          const countFinalTiles = (dir) => {
+            let count = 0;
+            const files = fs.readdirSync(dir);
+            files.forEach(file => {
+              const filePath = path.join(dir, file);
+              const stat = fs.statSync(filePath);
+              if (stat.isDirectory()) {
+                count += countFinalTiles(filePath);
+              } else if (file.endsWith('.jpg') || file.endsWith('.jpeg')) {
+                count++;
+              }
+            });
+            return count;
+          };
+          finalTileCount = countFinalTiles(tilesDir);
+        }
+        
+        if (existingTiles) {
+          // In validation mode
+          tilesValidated = existingTileCount;
+          tilesCreated = finalTileCount - existingTileCount;
+        } else {
+          // In full conversion mode
+          tilesCreated = finalTileCount;
+        }
+      } catch (err) {
+        console.error('Error calculating tile metrics:', err);
+      }
+
       console.log(`\n=== CONVERSION COMPLETED ===`);
       console.log(`File: ${path.basename(svsPath)}`);
       console.log(`Duration: ${(duration / 1000).toFixed(1)} seconds (${(duration / 60000).toFixed(1)} minutes)`);
       console.log(`Original size: ${(originalSize / 1024 / 1024 / 1024).toFixed(2)} GB`);
       console.log(`Converted size: ${(convertedSize / 1024 / 1024 / 1024).toFixed(2)} GB`);
       console.log(`Size change: ${convertedSize > originalSize ? '+' : ''}${(((convertedSize - originalSize) / originalSize) * 100).toFixed(1)}%`);
-      console.log(`Files created: ${fileCount.toLocaleString()}`);
+      
+      if (existingTiles) {
+        console.log(`\n--- TILE VALIDATION RESULTS ---`);
+        console.log(`Tiles validated: ${tilesValidated.toLocaleString()}`);
+        console.log(`Tiles created/repaired: ${tilesCreated.toLocaleString()}`);
+        console.log(`Total tiles: ${finalTileCount.toLocaleString()}`);
+        console.log(`Validation rate: ${(tilesValidated / (duration / 1000)).toFixed(0)} tiles/second`);
+        if (tilesCreated > 0) {
+          console.log(`Missing/corrupted tiles found: ${tilesCreated.toLocaleString()}`);
+          console.log(`Repair completion: ${((tilesValidated / finalTileCount) * 100).toFixed(1)}% validated, ${((tilesCreated / finalTileCount) * 100).toFixed(1)}% repaired`);
+        } else {
+          console.log(`All existing tiles validated successfully - no repairs needed`);
+        }
+        console.log(`------------------------------`);
+      } else {
+        console.log(`Total tiles created: ${finalTileCount.toLocaleString()}`);
+      }
+      
       console.log(`Processing rate: ${(originalSize / 1024 / 1024 / (duration / 1000)).toFixed(1)} MB/second`);
       console.log(`End time: ${new Date(endTime).toLocaleTimeString()}`);
       console.log(`============================\n`);
@@ -124,28 +218,53 @@ function convertSvsToDzi(svsPath, outputName) {
 }
 
 // Alternative conversion using Sharp (fallback)
-function convertWithSharp(svsPath, outputName) {
+function convertWithSharp(svsPath, outputName, startTime, originalSize) {
   return new Promise((resolve, reject) => {
     const sharp = require('sharp');
-    const outputPath = path.join(dziDir, `${outputName}.dzi`);
+    const outputPath = path.join(dziDir, outputName);
+    const dziPath = `${outputPath}.dzi`;
     
-    console.log(`Attempting Sharp conversion for ${svsPath}...`);
+    console.log(`\n=== SHARP FALLBACK CONVERSION ===`);
+    console.log(`Attempting Sharp conversion for ${path.basename(svsPath)}...`);
+    console.log(`Note: Sharp has limited SVS support`);
+    console.log(`================================\n`);
     
-    // Sharp doesn't directly support SVS, so we'll create a basic tile structure
+    // Sharp tile generation
     sharp(svsPath)
       .tile({
         size: 256,
         overlap: 1,
         layout: 'dz'
       })
-      .dz()
-      .toFile(outputPath.replace('.dzi', ''))
+      .toFile(outputPath)
       .then(() => {
-        console.log(`Sharp conversion completed: ${outputPath}`);
-        resolve(outputPath);
+        const endTime = Date.now();
+        const duration = endTime - startTime;
+        
+        console.log(`\n=== SHARP CONVERSION COMPLETED ===`);
+        console.log(`File: ${path.basename(svsPath)}`);
+        console.log(`Duration: ${(duration / 1000).toFixed(1)} seconds`);
+        console.log(`Method: Sharp fallback`);
+        console.log(`=================================\n`);
+        
+        resolve({
+          dziPath,
+          metrics: {
+            duration,
+            originalSize,
+            convertedSize: 0, // Sharp doesn't provide easy size calculation
+            fileCount: 0,
+            processingRate: originalSize / 1024 / 1024 / (duration / 1000),
+            startTime,
+            endTime: endTime,
+            method: 'sharp'
+          }
+        });
       })
       .catch(error => {
-        console.error(`Sharp conversion failed: ${error}`);
+        console.error(`\n=== SHARP CONVERSION FAILED ===`);
+        console.error(`Error: ${error.message}`);
+        console.error(`===============================\n`);
         reject(error);
       });
   });

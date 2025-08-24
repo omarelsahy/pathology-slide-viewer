@@ -44,13 +44,14 @@ class AutoProcessor extends EventEmitter {
       persistent: true,
       ignoreInitial: false, // Process existing files on startup
       awaitWriteFinish: {
-        stabilityThreshold: 2000, // Wait 2 seconds after file stops changing
+        stabilityThreshold: 3000, // Wait 3 seconds after file stops changing (increased for file locking)
         pollInterval: 100
       }
     });
 
     this.watcher
       .on('add', (filePath) => this.handleFileAdded(filePath))
+      .on('unlink', (filePath) => this.handleFileDeleted(filePath))
       .on('ready', () => {
         console.log('Auto-processor file watcher is ready');
         this.emit('ready');
@@ -101,6 +102,40 @@ class AutoProcessor extends EventEmitter {
     });
 
     this.emit('fileDetected', { filePath, fileName, baseName });
+  }
+
+  handleFileDeleted(filePath) {
+    const fileName = path.basename(filePath);
+    const fileExt = path.extname(fileName).toLowerCase();
+    
+    // Only handle supported formats
+    if (!this.supportedFormats.includes(fileExt)) {
+      return;
+    }
+
+    // Remove from processed files set so it can be reprocessed if re-added
+    if (this.processedFiles.has(filePath)) {
+      this.processedFiles.delete(filePath);
+      console.log(`\n=== SLIDE DELETED ===`);
+      console.log(`File: ${fileName}`);
+      console.log(`Path: ${filePath}`);
+      console.log(`Removed from processed files tracking`);
+      console.log(`====================\n`);
+      
+      this.emit('fileDeleted', { filePath, fileName });
+    }
+
+    // Remove from processing queue if it's waiting to be processed
+    const queueIndex = this.processingQueue.findIndex(item => item.filePath === filePath);
+    if (queueIndex !== -1) {
+      const removedItem = this.processingQueue.splice(queueIndex, 1)[0];
+      console.log(`Removed ${fileName} from processing queue`);
+      
+      this.emit('queueUpdated', {
+        queueLength: this.processingQueue.length,
+        removed: removedItem
+      });
+    }
   }
 
   addToQueue(fileInfo) {
@@ -264,6 +299,15 @@ class AutoProcessor extends EventEmitter {
       processedCount: this.processedFiles.size,
       supportedFormats: this.supportedFormats
     };
+  }
+
+  // Clear processed files tracking (useful for testing or manual reset)
+  clearProcessedFiles() {
+    const count = this.processedFiles.size;
+    this.processedFiles.clear();
+    console.log(`Cleared ${count} processed files from tracking`);
+    this.emit('processedFilesCleared', { count });
+    return count;
   }
 
   getQueue() {
