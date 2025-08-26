@@ -40,11 +40,7 @@ function convertSvsToDzi(svsPath, outputName) {
     const existingTiles = fs.existsSync(tilesDir);
     let existingTileCount = 0;
     
-    // Debug logging for tile folder detection
-    console.log(`\n--- TILE FOLDER CHECK ---`);
-    console.log(`Looking for: ${tilesDir}`);
-    console.log(`Exists: ${existingTiles}`);
-    console.log(`-------------------------\n`);
+    // Check for existing tile folder (debug logging removed for production)
     
     if (existingTiles) {
       // Count existing tiles
