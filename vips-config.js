@@ -51,25 +51,17 @@ class VipsConfig {
     const {
       tileSize = 256,
       overlap = 1,
-      quality = 90,
+      quality = 80,
       layout = 'dz',
-      suffix = '.jpg',
-      compression = 'jpeg'
+      suffix = '.jpg'
     } = options;
 
-    // Build optimized command with performance flags
+    // Use basic VIPS command for now - add optimizations gradually
     let command = `vips dzsave "${inputPath}" "${outputPath}"`;
     command += ` --layout ${layout}`;
-    command += ` --suffix ${suffix}[Q=${quality},optimize_coding,progressive]`;
+    command += ` --suffix ${suffix}[Q=${quality}]`;
     command += ` --overlap ${overlap}`;
     command += ` --tile-size ${tileSize}`;
-    
-    // Add performance optimizations
-    command += ` --depth onetile`; // Generate all pyramid levels
-    command += ` --centre`; // Center tiles for better caching
-    
-    // Add memory and threading hints (these are passed via environment)
-    // The actual threading is controlled by environment variables
     
     return command;
   }
