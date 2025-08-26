@@ -11,8 +11,8 @@ class VipsConfig {
     this.availableMemory = os.freemem();
     
     // Calculate optimal settings based on system resources
-    this.optimalThreads = Math.max(1, Math.floor(this.cpuCount * 0.8)); // Use 80% of CPU cores
-    this.maxMemoryMB = Math.floor((this.totalMemory * 0.6) / (1024 * 1024)); // Use 60% of total RAM
+    this.optimalThreads = Math.max(1, Math.floor(this.cpuCount * 0.5)); // Use 50% of CPU cores
+    this.maxMemoryMB = Math.floor((this.totalMemory * 0.4) / (1024 * 1024)); // Use 40% of total RAM
     this.tileBufferSize = Math.min(512, Math.floor(this.maxMemoryMB / 4)); // Quarter of allocated memory for tile buffer
     
     console.log(`VIPS Configuration initialized:`);
