@@ -5,9 +5,13 @@ const cors = require('cors');
 const WebSocket = require('ws');
 const { exec } = require('child_process');
 const AutoProcessor = require('./autoProcessor');
+const VipsConfig = require('./vips-config');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Initialize VIPS configuration for optimal performance
+const vipsConfig = new VipsConfig();
 
 // Middleware
 app.use(cors());
@@ -65,8 +69,15 @@ function convertSvsToDzi(svsPath, outputName) {
       }
     }
     
-    // Using VIPS command to convert SVS to DZI
-    const command = `vips dzsave "${svsPath}" "${outputPath}" --layout dz --suffix .jpg[Q=90] --overlap 1 --tile-size 256`;
+    // Using optimized VIPS command to convert SVS to DZI
+    const command = vipsConfig.getOptimizedCommand(svsPath, outputPath, {
+      tileSize: 256,
+      overlap: 1,
+      quality: 90
+    });
+    
+    // Set optimized environment variables for VIPS
+    const vipsEnv = { ...process.env, ...vipsConfig.getEnvironmentVars() };
     
     console.log(`\n=== CONVERSION STARTED ===`);
     console.log(`File: ${path.basename(svsPath)}`);
@@ -82,7 +93,7 @@ function convertSvsToDzi(svsPath, outputName) {
     console.log(`Command: ${command}`);
     console.log(`========================\n`);
     
-    exec(command, (error, stdout, stderr) => {
+    exec(command, { env: vipsEnv, maxBuffer: 1024 * 1024 * 10 }, (error, stdout, stderr) => {
       const endTime = Date.now();
       const duration = endTime - startTime;
       
@@ -194,6 +205,8 @@ function convertSvsToDzi(svsPath, outputName) {
       }
       
       console.log(`Processing rate: ${(originalSize / 1024 / 1024 / (duration / 1000)).toFixed(1)} MB/second`);
+      console.log(`VIPS threads used: ${vipsEnv.VIPS_CONCURRENCY}`);
+      console.log(`VIPS memory limit: ${Math.floor(parseInt(vipsEnv.VIPS_CACHE_MAX_MEMORY) / (1024 * 1024))} MB`);
       console.log(`End time: ${new Date(endTime).toLocaleTimeString()}`);
       console.log(`============================\n`);
       
@@ -412,6 +425,35 @@ app.post('/api/convert/:filename', async (req, res) => {
   } catch (error) {
     console.error('Conversion error:', error);
     res.status(500).json({ error: 'Conversion failed', details: error.message });
+  }
+});
+
+// Performance monitoring endpoint
+app.get('/api/performance/status', (req, res) => {
+  const systemMetrics = vipsConfig.getSystemMetrics();
+  const vipsEnv = vipsConfig.getEnvironmentVars();
+  
+  res.json({
+    system: systemMetrics,
+    vipsConfig: {
+      threads: vipsEnv.VIPS_CONCURRENCY,
+      maxMemoryMB: Math.floor(parseInt(vipsEnv.VIPS_CACHE_MAX_MEMORY) / (1024 * 1024)),
+      bufferSizeMB: Math.floor(parseInt(vipsEnv.VIPS_BUFFER_SIZE) / (1024 * 1024))
+    },
+    recommendations: {
+      defenderExclusionsConfigured: 'Run setup-defender-exclusions.ps1 as Administrator',
+      gpuAcceleration: 'Check /api/performance/gpu-support for GPU acceleration status'
+    }
+  });
+});
+
+// GPU support check endpoint
+app.get('/api/performance/gpu-support', async (req, res) => {
+  try {
+    const gpuSupport = await vipsConfig.checkGpuSupport();
+    res.json(gpuSupport);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to check GPU support', details: error.message });
   }
 });
 
