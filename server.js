@@ -1,33 +1,71 @@
+require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const cors = require('cors');
 const WebSocket = require('ws');
 const { exec } = require('child_process');
+const config = require('./config');
 const AutoProcessor = require('./autoProcessor');
 const VipsConfig = require('./vips-config');
+const LabServerClient = require('./services/labServerClient');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = config.port;
 
-// Initialize VIPS configuration for optimal performance
-const vipsConfig = new VipsConfig();
+// Initialize components based on mode
+let vipsConfig, labClient, autoProcessor;
+
+if (config.isServerMode()) {
+  // Initialize VIPS configuration for lab server
+  vipsConfig = new VipsConfig();
+} else {
+  // Initialize lab server client for home computer
+  labClient = new LabServerClient(config);
+}
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: config.corsOrigins,
+  credentials: true
+}));
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
 
-// Create necessary directories if they don't exist
-const uploadsDir = path.join(__dirname, 'uploads');
-const slidesDir = path.join(__dirname, 'public', 'slides');
-const dziDir = path.join(__dirname, 'public', 'dzi');
+// API Authentication middleware for server mode
+if (config.isServerMode()) {
+  app.use('/api/v1', (req, res, next) => {
+    const apiKey = req.headers['x-api-key'];
+    if (apiKey !== config.apiKey) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    next();
+  });
+}
 
-[uploadsDir, slidesDir, dziDir].forEach(dir => {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-});
+// Static files
+if (config.isServerMode()) {
+  app.use(express.static(path.join(__dirname, 'public')));
+} else {
+  // In client mode, serve UI but proxy slide data
+  app.use(express.static(path.join(__dirname, 'public')));
+}
+
+// Create necessary directories based on mode
+if (config.isServerMode()) {
+  // Lab server needs all directories
+  [config.uploadsDir, config.slidesDir, config.dziDir].forEach(dir => {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+  });
+} else {
+  // Home client needs cache and temp directories
+  [config.cacheDir, config.tempDir].forEach(dir => {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+  });
+}
 
 // SVS to DZI conversion function
 function convertSvsToDzi(svsPath, outputName) {
@@ -285,12 +323,24 @@ app.get('/', (req, res) => {
 });
 
 // API endpoint to list available slides
-app.get('/api/slides', (req, res) => {
+app.get('/api/slides', async (req, res) => {
+  if (config.isClientMode()) {
+    // Proxy request to lab server
+    try {
+      const slides = await labClient.getSlides();
+      res.json(slides);
+    } catch (error) {
+      res.status(503).json({ error: 'Lab server unavailable', details: error.message });
+    }
+    return;
+  }
+
+  // Server mode - original logic
   const slideFiles = [];
   
   // Check original slides directory
-  if (fs.existsSync(slidesDir)) {
-    const originalFiles = fs.readdirSync(slidesDir);
+  if (fs.existsSync(config.slidesDir)) {
+    const originalFiles = fs.readdirSync(config.slidesDir);
     const supportedFormats = ['.svs', '.ndpi', '.tif', '.tiff', '.jp2', '.vms', '.vmu', '.scn'];
     
     originalFiles
@@ -300,7 +350,7 @@ app.get('/api/slides', (req, res) => {
       })
       .forEach(file => {
         const baseName = path.basename(file, path.extname(file));
-        const dziPath = path.join(dziDir, `${baseName}.dzi`);
+        const dziPath = path.join(config.dziDir, `${baseName}.dzi`);
         const hasDzi = fs.existsSync(dziPath);
         
         slideFiles.push({
@@ -309,14 +359,14 @@ app.get('/api/slides', (req, res) => {
           dziFile: hasDzi ? `/dzi/${baseName}.dzi` : null,
           format: path.extname(file).toLowerCase(),
           converted: hasDzi,
-          size: fs.statSync(path.join(slidesDir, file)).size
+          size: fs.statSync(path.join(config.slidesDir, file)).size
         });
       });
   }
   
   // Check for standalone DZI files
-  if (fs.existsSync(dziDir)) {
-    const dziFiles = fs.readdirSync(dziDir).filter(file => file.endsWith('.dzi'));
+  if (fs.existsSync(config.dziDir)) {
+    const dziFiles = fs.readdirSync(config.dziDir).filter(file => file.endsWith('.dzi'));
     dziFiles.forEach(file => {
       const baseName = path.basename(file, '.dzi');
       const existing = slideFiles.find(slide => slide.name === baseName);
@@ -339,9 +389,22 @@ app.get('/api/slides', (req, res) => {
 });
 
 // Serve slide files directly
-app.get('/slides/:filename', (req, res) => {
+app.get('/slides/:filename', async (req, res) => {
   const filename = req.params.filename;
-  const filePath = path.join(slidesDir, filename);
+  
+  if (config.isClientMode()) {
+    // Proxy request to lab server
+    try {
+      const stream = await labClient.streamDziTile(`../slides/${filename}`);
+      stream.pipe(res);
+    } catch (error) {
+      res.status(404).json({ error: 'Slide not found on lab server' });
+    }
+    return;
+  }
+
+  // Server mode - original logic
+  const filePath = path.join(config.slidesDir, filename);
   
   if (!fs.existsSync(filePath)) {
     return res.status(404).json({ error: 'Slide not found' });
@@ -377,12 +440,38 @@ app.get('/slides/:filename', (req, res) => {
 });
 
 // Serve DZI files
-app.use('/dzi', express.static(dziDir));
+if (config.isServerMode()) {
+  app.use('/dzi', express.static(config.dziDir));
+} else {
+  // Client mode - proxy DZI requests to lab server
+  app.get('/dzi/*', async (req, res) => {
+    try {
+      const tilePath = req.params[0];
+      const stream = await labClient.streamDziTile(tilePath);
+      stream.pipe(res);
+    } catch (error) {
+      res.status(404).json({ error: 'DZI tile not found on lab server' });
+    }
+  });
+}
 
 // API endpoint to convert SVS to DZI
 app.post('/api/convert/:filename', async (req, res) => {
   const filename = req.params.filename;
-  const svsPath = path.join(slidesDir, filename);
+  
+  if (config.isClientMode()) {
+    // Proxy conversion request to lab server
+    try {
+      const result = await labClient.convertSlide(filename);
+      res.json(result);
+    } catch (error) {
+      res.status(503).json({ error: 'Lab server unavailable', details: error.message });
+    }
+    return;
+  }
+
+  // Server mode - original logic
+  const svsPath = path.join(config.slidesDir, filename);
   
   if (!fs.existsSync(svsPath)) {
     return res.status(404).json({ error: 'Slide file not found' });
@@ -458,7 +547,18 @@ app.get('/api/performance/gpu-support', async (req, res) => {
 });
 
 // Auto-processor control endpoints
-app.get('/api/auto-processor/status', (req, res) => {
+app.get('/api/auto-processor/status', async (req, res) => {
+  if (config.isClientMode()) {
+    // Proxy to lab server
+    try {
+      const status = await labClient.getAutoProcessorStatus();
+      res.json(status);
+    } catch (error) {
+      res.status(503).json({ error: 'Lab server unavailable', details: error.message });
+    }
+    return;
+  }
+
   if (!autoProcessor) {
     return res.status(503).json({ error: 'Auto-processor not initialized' });
   }
@@ -469,7 +569,18 @@ app.get('/api/auto-processor/status', (req, res) => {
   });
 });
 
-app.post('/api/auto-processor/enable', (req, res) => {
+app.post('/api/auto-processor/enable', async (req, res) => {
+  if (config.isClientMode()) {
+    // Proxy to lab server
+    try {
+      const result = await labClient.enableAutoProcessor();
+      res.json(result);
+    } catch (error) {
+      res.status(503).json({ error: 'Lab server unavailable', details: error.message });
+    }
+    return;
+  }
+
   if (!autoProcessor) {
     return res.status(503).json({ error: 'Auto-processor not initialized' });
   }
@@ -478,7 +589,18 @@ app.post('/api/auto-processor/enable', (req, res) => {
   res.json({ message: 'Auto-processor enabled', status: autoProcessor.getStatus() });
 });
 
-app.post('/api/auto-processor/disable', (req, res) => {
+app.post('/api/auto-processor/disable', async (req, res) => {
+  if (config.isClientMode()) {
+    // Proxy to lab server
+    try {
+      const result = await labClient.disableAutoProcessor();
+      res.json(result);
+    } catch (error) {
+      res.status(503).json({ error: 'Lab server unavailable', details: error.message });
+    }
+    return;
+  }
+
   if (!autoProcessor) {
     return res.status(503).json({ error: 'Auto-processor not initialized' });
   }
@@ -487,9 +609,28 @@ app.post('/api/auto-processor/disable', (req, res) => {
   res.json({ message: 'Auto-processor disabled', status: autoProcessor.getStatus() });
 });
 
+// Add lab server connection test endpoint for client mode
+if (config.isClientMode()) {
+  app.get('/api/lab-connection/test', async (req, res) => {
+    try {
+      const connectionTest = await labClient.testConnection();
+      res.json(connectionTest);
+    } catch (error) {
+      res.status(503).json({ error: 'Connection test failed', details: error.message });
+    }
+  });
+}
+
 // Create HTTP server
 const server = app.listen(PORT, () => {
-  console.log(`Server is running on http://localhost:${PORT}`);
+  console.log(`\n=== PATHOLOGY SLIDE VIEWER ===`);
+  console.log(`Mode: ${config.mode.toUpperCase()}`);
+  console.log(`Server: http://localhost:${PORT}`);
+  if (config.isClientMode()) {
+    console.log(`Lab Server: ${config.labServer.url}`);
+  }
+  console.log(`Configuration:`, config.getSummary());
+  console.log(`=============================\n`);
 });
 
 // WebSocket server for real-time updates
@@ -512,67 +653,71 @@ wss.on('connection', (ws) => {
   });
 });
 
-// Initialize Auto Processor
-const autoProcessor = new AutoProcessor(slidesDir, convertSvsToDzi, {
-  enabled: true,
-  maxRetries: 3,
-  retryDelay: 5000
-});
-
-// Auto Processor Event Handlers
-autoProcessor.on('fileDetected', (data) => {
-  console.log(`Auto-processor detected new file: ${data.fileName}`);
-  broadcastToClients({
-    type: 'auto_file_detected',
-    fileName: data.fileName,
-    baseName: data.baseName
+// Initialize Auto Processor (only in server mode)
+if (config.isServerMode()) {
+  autoProcessor = new AutoProcessor(config.slidesDir, convertSvsToDzi, {
+    enabled: config.autoProcessorEnabled,
+    maxRetries: 3,
+    retryDelay: 5000
   });
-});
+}
 
-autoProcessor.on('processingStarted', (fileInfo) => {
-  console.log(`Auto-processing started: ${fileInfo.fileName}`);
-  broadcastToClients({
-    type: 'auto_processing_started',
-    fileName: fileInfo.fileName,
-    baseName: fileInfo.baseName
+// Auto Processor Event Handlers (only in server mode)
+if (config.isServerMode() && autoProcessor) {
+  autoProcessor.on('fileDetected', (data) => {
+    console.log(`Auto-processor detected new file: ${data.fileName}`);
+    broadcastToClients({
+      type: 'auto_file_detected',
+      fileName: data.fileName,
+      baseName: data.baseName
+    });
   });
-});
 
-autoProcessor.on('processingCompleted', (data) => {
-  console.log(`Auto-processing completed: ${data.fileInfo.fileName}`);
-  broadcastToClients({
-    type: 'auto_conversion_complete',
-    fileName: data.fileInfo.baseName,
-    dziPath: `/dzi/${data.fileInfo.baseName}.dzi`,
-    metrics: data.result.metrics
+  autoProcessor.on('processingStarted', (fileInfo) => {
+    console.log(`Auto-processing started: ${fileInfo.fileName}`);
+    broadcastToClients({
+      type: 'auto_processing_started',
+      fileName: fileInfo.fileName,
+      baseName: fileInfo.baseName
+    });
   });
-});
 
-autoProcessor.on('processingFailed', (data) => {
-  console.log(`Auto-processing failed: ${data.fileInfo.fileName}`);
-  broadcastToClients({
-    type: 'auto_conversion_error',
-    fileName: data.fileInfo.baseName,
-    error: data.error.message
+  autoProcessor.on('processingCompleted', (data) => {
+    console.log(`Auto-processing completed: ${data.fileInfo.fileName}`);
+    broadcastToClients({
+      type: 'auto_conversion_complete',
+      fileName: data.fileInfo.baseName,
+      dziPath: `/dzi/${data.fileInfo.baseName}.dzi`,
+      metrics: data.result.metrics
+    });
   });
-});
 
-autoProcessor.on('fileRetry', (data) => {
-  console.log(`Auto-processing retry: ${data.fileInfo.fileName} (${data.retryCount}/${data.maxRetries})`);
-  broadcastToClients({
-    type: 'auto_processing_retry',
-    fileName: data.fileInfo.baseName,
-    retryCount: data.retryCount,
-    maxRetries: data.maxRetries
+  autoProcessor.on('processingFailed', (data) => {
+    console.log(`Auto-processing failed: ${data.fileInfo.fileName}`);
+    broadcastToClients({
+      type: 'auto_conversion_error',
+      fileName: data.fileInfo.baseName,
+      error: data.error.message
+    });
   });
-});
 
-autoProcessor.on('queueUpdated', (data) => {
-  broadcastToClients({
-    type: 'auto_queue_updated',
-    queueLength: data.queueLength
+  autoProcessor.on('fileRetry', (data) => {
+    console.log(`Auto-processing retry: ${data.fileInfo.fileName} (${data.retryCount}/${data.maxRetries})`);
+    broadcastToClients({
+      type: 'auto_processing_retry',
+      fileName: data.fileInfo.baseName,
+      retryCount: data.retryCount,
+      maxRetries: data.maxRetries
+    });
   });
-});
+
+  autoProcessor.on('queueUpdated', (data) => {
+    broadcastToClients({
+      type: 'auto_queue_updated',
+      queueLength: data.queueLength
+    });
+  });
+}
 
 // Helper function to broadcast to all WebSocket clients
 function broadcastToClients(message) {
