@@ -70,7 +70,7 @@ if (config.isServerMode()) {
 // SVS to DZI conversion function
 function convertSvsToDzi(svsPath, outputName) {
   return new Promise((resolve, reject) => {
-    const outputPath = path.join(dziDir, outputName);
+    const outputPath = path.join(config.dziDir, outputName);
     const startTime = Date.now();
     
     // Get original file stats
@@ -268,7 +268,7 @@ function convertSvsToDzi(svsPath, outputName) {
 function convertWithSharp(svsPath, outputName, startTime, originalSize) {
   return new Promise((resolve, reject) => {
     const sharp = require('sharp');
-    const outputPath = path.join(dziDir, outputName);
+    const outputPath = path.join(config.dziDir, outputName);
     const dziPath = `${outputPath}.dzi`;
     
     console.log(`\n=== SHARP FALLBACK CONVERSION ===`);
