@@ -6,8 +6,15 @@ class Config {
     this.mode = process.env.NODE_MODE || 'server'; // 'server' or 'client'
     this.environment = process.env.NODE_ENV || 'development';
     
+    // Define all default ports in one place (single source of truth)
+    this.defaultPorts = {
+      server: 3001,
+      client: 3001,
+      labServer: 3001
+    };
+    
     // Common configuration
-    this.port = process.env.PORT || 3000;
+    this.port = process.env.PORT || this.defaultPorts.server;
     this.apiVersion = 'v1';
     
     // Security
@@ -27,7 +34,7 @@ class Config {
     // Lab server configuration
     this.allowRemoteConnections = true;
     this.corsOrigins = [
-      'http://localhost:3001', // Home development
+      `http://localhost:${this.defaultPorts.client}`, // Home development
       process.env.HOME_CLIENT_URL || '*' // Allow home computer access
     ];
     
@@ -49,11 +56,11 @@ class Config {
     
     // Home client configuration
     this.allowRemoteConnections = false;
-    this.corsOrigins = ['http://localhost:3000'];
+    this.corsOrigins = [`http://localhost:${this.defaultPorts.client}`];
     
     // Lab server connection settings
     this.labServer = {
-      url: process.env.LAB_SERVER_URL || 'http://192.168.1.100:3000',
+      url: process.env.LAB_SERVER_URL || `http://192.168.1.100:${this.defaultPorts.labServer}`,
       apiKey: this.apiKey,
       timeout: 30000, // 30 seconds
       retryAttempts: 3

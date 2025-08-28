@@ -5,7 +5,7 @@ echo.
 REM Set environment variables for lab server
 set NODE_MODE=server
 set NODE_ENV=production
-set PORT=3000
+REM PORT will be read from .env file or use config.js default
 
 REM Check if .env file exists, create from example if not
 if not exist ".env" (
