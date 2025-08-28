@@ -1,0 +1,94 @@
+##############################################
+# Pathology Slide Viewer – .gitignore (clean)
+# Keep code, config, docs, web assets
+# Ignore WSI data (SVS), DZI tiles, outputs
+# Track .env.example; ignore real .env
+##############################################
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*.tmp
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-*.log*
+pnpm-*.log*
+
+# Node / Web build artifacts
+node_modules/
+dist/
+build/
+.next/
+.nuxt/
+coverage/
+.svelte-kit/
+.vercel/
+.parcel-cache/
+.turbo/
+.expo/
+.cache/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.venv*/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Other tool caches
+**/.mypy_cache/
+**/.ruff_cache/
+**/.tox/
+
+# Secrets & env
+.env
+.env.*
+!.env.example
+
+# Digital pathology data (DO NOT COMMIT)
+*.svs
+*.ndpi
+*.scn
+*.mrxs
+*.tif
+*.tiff
+*.bif
+*.svslide
+*.vms
+*.vmu
+
+# Deep Zoom (DZI) pyramids & tile trees
+*.dzi
+*_files/
+*_files/**
+
+# Generated slide data / outputs anywhere
+/data/
+data/
+datasets/
+samples/
+slides/
+tiles/
+pyramids/
+outputs/
+cache/
+tmp/
+temp/
+
+# Public web assets (keep code; ignore only heavy tiles)
+public/*_files/
+public/*.dzi
+
+# Safety allowlists
+!public/index.html
+!public/js/
