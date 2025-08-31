@@ -29,6 +29,36 @@
             margin-top: 10px;
             width: 100%;
         }
+        #color-profile-panel {
+            display: none;
+            margin-top: 15px;
+            padding: 10px;
+            background: rgba(248, 249, 250, 0.95);
+            border-radius: 5px;
+            border: 1px solid #dee2e6;
+        }
+        .profile-status.text-success {
+            color: #28a745;
+        }
+        .profile-status.text-warning {
+            color: #ffc107;
+        }
+        .text-muted {
+            color: #6c757d;
+        }
+        .text-danger {
+            color: #dc3545;
+        }
+        .small {
+            font-size: 0.875em;
+        }
+        .mt-2 {
+            margin-top: 0.5rem;
+        }
+        #profile-selector {
+            width: 100%;
+            margin-top: 5px;
+        }
     </style>
 </head>
 <body>
@@ -39,6 +69,17 @@
             <option value="">Loading slides...</option>
         </select>
         <button id="convert-btn" style="display:none; margin-top:10px; padding:5px 10px; background:#007bff; color:white; border:none; border-radius:3px; cursor:pointer;">Convert to DZI</button>
+        
+        <div id="color-profile-panel">
+            <h4 style="margin: 0 0 10px 0; font-size: 14px;">Color Profile</h4>
+            <div id="profile-info">
+                <p class="text-muted">Loading profile information...</p>
+            </div>
+            <label for="profile-selector" style="font-size: 12px; font-weight: bold;">Profile Override:</label>
+            <select id="profile-selector">
+                <option value="">Loading profiles...</option>
+            </select>
+        </div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/openseadragon/3.1.0/openseadragon.min.js"></script>

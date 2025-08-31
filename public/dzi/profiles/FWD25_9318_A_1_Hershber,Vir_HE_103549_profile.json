@@ -1,0 +1,15 @@
+{
+  "hasEmbeddedProfile": true,
+  "hasCompatibilityIssues": true,
+  "colorSpace": "RGB",
+  "description": "ICC profile present but incompatible with VIPS export",
+  "detectionMethod": "vips_warning_analysis",
+  "compatibilityIssue": "Profile does not support relative output intent",
+  "profilePath": null,
+  "recommendedProfile": "sRGB IEC61966-2.1",
+  "extractedAt": "2025-08-30T00:37:13.522Z",
+  "fileInfo": {
+    "baseName": "FWD25_9318_A_1_Hershber,Vir_HE_103549",
+    "originalFile": "C:\\Pathology Slide Viewer\\CascadeProjects\\windsurf-project\\public\\slides\\FWD25_9318_A_1_Hershber,Vir_HE_103549.svs"
+  }
+}

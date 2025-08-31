@@ -8,17 +8,19 @@ const { exec } = require('child_process');
 const config = require('./config');
 const AutoProcessor = require('./autoProcessor');
 const VipsConfig = require('./vips-config');
+const ColorProfileManager = require('./colorProfile');
 const LabServerClient = require('./services/labServerClient');
 
 const app = express();
 const PORT = config.port;
 
 // Initialize components based on mode
-let vipsConfig, labClient, autoProcessor;
+let vipsConfig, labClient, autoProcessor, colorProfileManager;
 
 if (config.isServerMode()) {
   // Initialize VIPS configuration for lab server
   vipsConfig = new VipsConfig();
+  colorProfileManager = new ColorProfileManager(config);
 } else {
   // Initialize lab server client for home computer
   labClient = new LabServerClient(config);
@@ -69,13 +71,24 @@ if (config.isServerMode()) {
 
 // SVS to DZI conversion function
 function convertSvsToDzi(svsPath, outputName) {
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
     const outputPath = path.join(config.dziDir, outputName);
     const startTime = Date.now();
     
     // Get original file stats
     const originalStats = fs.statSync(svsPath);
     const originalSize = originalStats.size;
+    
+    // Extract color profile if in server mode
+    let colorProfile = null;
+    if (config.isServerMode() && colorProfileManager) {
+      try {
+        colorProfile = await colorProfileManager.extractProfile(svsPath, outputName);
+        console.log(`Color profile extraction completed for ${outputName}`);
+      } catch (error) {
+        console.warn(`Color profile extraction failed for ${outputName}:`, error.message);
+      }
+    }
     
     // Check for existing tile folder
     const tilesDir = `${outputPath}_files`;
@@ -107,12 +120,37 @@ function convertSvsToDzi(svsPath, outputName) {
       }
     }
     
-    // Using optimized VIPS command to convert SVS to DZI
-    const command = vipsConfig.getOptimizedCommand(svsPath, outputPath, {
-      tileSize: 256,
-      overlap: 1,
-      quality: 90
-    });
+    // Using optimized VIPS command to convert SVS to DZI with color management
+    let command;
+    let useColorManagement = false;
+    
+    if (colorProfileManager && colorProfile && colorProfile.hasEmbeddedProfile) {
+      // Try color-managed conversion for slides with ICC profiles
+      try {
+        command = colorProfileManager.getColorManagedCommand(svsPath, outputPath, {
+          tileSize: 256,
+          overlap: 1,
+          quality: 90,
+          preserveProfile: true
+        });
+        useColorManagement = true;
+        console.log(`Using color-managed conversion for ${path.basename(svsPath)}`);
+      } catch (error) {
+        console.log(`Color management failed, using fallback: ${error.message}`);
+        command = colorProfileManager.getFallbackCommand(svsPath, outputPath, {
+          tileSize: 256,
+          overlap: 1,
+          quality: 90
+        });
+      }
+    } else {
+      // Standard conversion for slides without profiles
+      command = vipsConfig.getOptimizedCommand(svsPath, outputPath, {
+        tileSize: 256,
+        overlap: 1,
+        quality: 90
+      });
+    }
     
     // Set optimized environment variables for VIPS
     const vipsEnv = { ...process.env, ...vipsConfig.getEnvironmentVars() };
@@ -250,6 +288,7 @@ function convertSvsToDzi(svsPath, outputName) {
       
       resolve({
         dziPath,
+        colorProfile,
         metrics: {
           duration,
           originalSize,
@@ -485,15 +524,16 @@ app.post('/api/convert/:filename', async (req, res) => {
     
     // Start conversion in background
     convertSvsToDzi(svsPath, baseName)
-      .then(dziPath => {
-        console.log(`Conversion completed: ${dziPath}`);
+      .then(result => {
+        console.log(`Conversion completed: ${result.dziPath}`);
         // Notify connected WebSocket clients
         wss.clients.forEach(client => {
           if (client.readyState === WebSocket.OPEN) {
             client.send(JSON.stringify({
               type: 'conversion_complete',
               filename: baseName,
-              dziPath: `/dzi/${baseName}.dzi`
+              dziPath: `/dzi/${baseName}.dzi`,
+              colorProfile: result.colorProfile
             }));
           }
         });
@@ -609,6 +649,107 @@ app.post('/api/auto-processor/disable', async (req, res) => {
   res.json({ message: 'Auto-processor disabled', status: autoProcessor.getStatus() });
 });
 
+// Color Profile Management API Endpoints
+app.get('/api/color-profiles/list', (req, res) => {
+  if (config.isClientMode()) {
+    return res.status(503).json({ error: 'Color profile management only available in server mode' });
+  }
+
+  if (!colorProfileManager) {
+    return res.status(503).json({ error: 'Color profile manager not initialized' });
+  }
+
+  try {
+    const profiles = colorProfileManager.listProfiles();
+    res.json({ profiles, count: profiles.length });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to list color profiles', details: error.message });
+  }
+});
+
+app.get('/api/color-profiles/standards', (req, res) => {
+  if (config.isClientMode()) {
+    return res.status(503).json({ error: 'Color profile management only available in server mode' });
+  }
+
+  if (!colorProfileManager) {
+    return res.status(503).json({ error: 'Color profile manager not initialized' });
+  }
+
+  try {
+    const standards = colorProfileManager.getStandardProfiles();
+    res.json(standards);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get standard profiles', details: error.message });
+  }
+});
+
+app.get('/api/slides/:baseName/color-profile', (req, res) => {
+  const { baseName } = req.params;
+  
+  if (config.isClientMode()) {
+    return res.status(503).json({ error: 'Color profile management only available in server mode' });
+  }
+
+  if (!colorProfileManager) {
+    return res.status(503).json({ error: 'Color profile manager not initialized' });
+  }
+
+  try {
+    const profileMetadata = colorProfileManager.getProfileMetadata(baseName);
+    
+    if (!profileMetadata) {
+      return res.status(404).json({ error: 'Color profile not found for slide' });
+    }
+    
+    res.json(profileMetadata);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get color profile', details: error.message });
+  }
+});
+
+app.post('/api/color-profiles/validate', (req, res) => {
+  const { slideNames } = req.body;
+  
+  if (config.isClientMode()) {
+    return res.status(503).json({ error: 'Color profile management only available in server mode' });
+  }
+
+  if (!colorProfileManager) {
+    return res.status(503).json({ error: 'Color profile manager not initialized' });
+  }
+
+  if (!Array.isArray(slideNames)) {
+    return res.status(400).json({ error: 'slideNames must be an array' });
+  }
+
+  try {
+    const validation = colorProfileManager.validateProfileConsistency(slideNames);
+    res.json(validation);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to validate profiles', details: error.message });
+  }
+});
+
+app.post('/api/color-profiles/cleanup', (req, res) => {
+  const { maxAge = 30 } = req.body;
+  
+  if (config.isClientMode()) {
+    return res.status(503).json({ error: 'Color profile management only available in server mode' });
+  }
+
+  if (!colorProfileManager) {
+    return res.status(503).json({ error: 'Color profile manager not initialized' });
+  }
+
+  try {
+    const cleanedCount = colorProfileManager.cleanupOldProfiles(maxAge);
+    res.json({ message: `Cleaned up ${cleanedCount} old profile files`, cleanedCount });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to cleanup profiles', details: error.message });
+  }
+});
+
 // Add lab server connection test endpoint for client mode
 if (config.isClientMode()) {
   app.get('/api/lab-connection/test', async (req, res) => {
@@ -688,7 +829,8 @@ if (config.isServerMode() && autoProcessor) {
       type: 'auto_conversion_complete',
       fileName: data.fileInfo.baseName,
       dziPath: `/dzi/${data.fileInfo.baseName}.dzi`,
-      metrics: data.result.metrics
+      metrics: data.result.metrics,
+      colorProfile: data.result.colorProfile
     });
   });
 

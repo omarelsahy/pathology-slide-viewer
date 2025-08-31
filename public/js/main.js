@@ -13,9 +13,13 @@ document.addEventListener('DOMContentLoaded', function() {
 
     const slideSelector = document.getElementById('slide-selector');
     const convertBtn = document.getElementById('convert-btn');
+    const colorProfilePanel = document.getElementById('color-profile-panel');
+    const profileSelector = document.getElementById('profile-selector');
+    const profileInfo = document.getElementById('profile-info');
     let slides = [];
     let ws = null;
     let currentSlide = null;
+    let colorProfiles = [];
 
     // WebSocket connection for real-time updates
     function connectWebSocket() {
@@ -23,11 +27,20 @@ document.addEventListener('DOMContentLoaded', function() {
         
         ws.onmessage = function(event) {
             const data = JSON.parse(event.data);
-            if (data.type === 'conversion_complete') {
-                alert(`Conversion completed for ${data.filename}! Refreshing slide list...`);
+            if (data.type === 'conversion_complete' || data.type === 'auto_conversion_complete') {
+                alert(`Conversion completed for ${data.filename || data.fileName}! Refreshing slide list...`);
                 loadSlides();
-            } else if (data.type === 'conversion_error') {
-                alert(`Conversion failed for ${data.filename}: ${data.error}`);
+                
+                // If color profile was extracted, show notification
+                if (data.colorProfile) {
+                    const hasProfile = data.colorProfile.hasEmbeddedProfile;
+                    const profileMsg = hasProfile ? 
+                        `Color profile extracted: ${data.colorProfile.description}` :
+                        'No embedded color profile found - using default settings';
+                    console.log(profileMsg);
+                }
+            } else if (data.type === 'conversion_error' || data.type === 'auto_conversion_error') {
+                alert(`Conversion failed for ${data.filename || data.fileName}: ${data.error}`);
             }
         };
         
@@ -64,6 +77,90 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    // Load color profiles
+    async function loadColorProfiles() {
+        try {
+            const response = await fetch('/api/color-profiles/list');
+            if (response.ok) {
+                const data = await response.json();
+                colorProfiles = data.profiles;
+            }
+        } catch (error) {
+            console.error('Error loading color profiles:', error);
+        }
+    }
+
+    // Load standard color profiles
+    async function loadStandardProfiles() {
+        try {
+            const response = await fetch('/api/color-profiles/standards');
+            if (response.ok) {
+                const standards = await response.json();
+                populateProfileSelector(standards);
+            }
+        } catch (error) {
+            console.error('Error loading standard profiles:', error);
+        }
+    }
+
+    // Populate profile selector
+    function populateProfileSelector(standards) {
+        if (!profileSelector) return;
+        
+        profileSelector.innerHTML = '';
+        const defaultOption = document.createElement('option');
+        defaultOption.value = '';
+        defaultOption.textContent = 'Auto (Preserve Original)';
+        profileSelector.appendChild(defaultOption);
+        
+        Object.entries(standards.profiles).forEach(([key, name]) => {
+            const option = document.createElement('option');
+            option.value = key;
+            option.textContent = name;
+            profileSelector.appendChild(option);
+        });
+    }
+
+    // Load slide color profile
+    async function loadSlideColorProfile(slideName) {
+        if (!profileInfo) return;
+        
+        try {
+            const response = await fetch(`/api/slides/${slideName}/color-profile`);
+            if (response.ok) {
+                const profile = await response.json();
+                displayProfileInfo(profile);
+            } else {
+                profileInfo.innerHTML = '<p class="text-muted">No color profile information available</p>';
+            }
+        } catch (error) {
+            console.error('Error loading slide color profile:', error);
+            profileInfo.innerHTML = '<p class="text-danger">Error loading color profile</p>';
+        }
+    }
+
+    // Display profile information
+    function displayProfileInfo(profile) {
+        if (!profileInfo) return;
+        
+        const hasProfile = profile.hasEmbeddedProfile;
+        const statusClass = hasProfile ? 'text-success' : 'text-warning';
+        const statusIcon = hasProfile ? '✓' : '⚠️';
+        
+        profileInfo.innerHTML = `
+            <div class="profile-status ${statusClass}">
+                <strong>${statusIcon} ${hasProfile ? 'Embedded Profile Found' : 'No Embedded Profile'}</strong>
+            </div>
+            <div class="profile-details mt-2">
+                <p><strong>Color Space:</strong> ${profile.colorSpace || 'Unknown'}</p>
+                <p><strong>Description:</strong> ${profile.description || 'N/A'}</p>
+                ${hasProfile ? `<p><strong>Profile Type:</strong> ${profile.profileType || 'Unknown'}</p>` : ''}
+                ${profile.recommendedProfile ? `<p><strong>Recommended:</strong> ${profile.recommendedProfile}</p>` : ''}
+                <p class="text-muted small">Extracted: ${new Date(profile.extractedAt).toLocaleString()}</p>
+            </div>
+        `;
+    }
+
     // Handle slide selection
     slideSelector.addEventListener('change', function() {
         const selectedValue = this.value;
@@ -74,6 +171,8 @@ document.addEventListener('DOMContentLoaded', function() {
             const slide = JSON.parse(selectedValue);
             console.log('Parsed slide:', slide);
             
+            currentSlide = slide;
+            
             if (slide.converted && slide.dziFile) {
                 // Load the DZI file
                 console.log('Loading DZI file:', slide.dziFile);
@@ -81,12 +180,23 @@ document.addEventListener('DOMContentLoaded', function() {
                     type: 'image',
                     tileSource: slide.dziFile
                 });
+                
+                // Show color profile panel and load profile info
+                if (colorProfilePanel) {
+                    colorProfilePanel.style.display = 'block';
+                    loadSlideColorProfile(slide.name);
+                }
+                convertBtn.style.display = 'none';
             } else {
                 // Show convert button instead of dialog
-                currentSlide = slide;
                 convertBtn.style.display = 'block';
                 convertBtn.textContent = `Convert ${slide.name} (${slide.size ? (slide.size / 1024 / 1024 / 1024).toFixed(1) + 'GB' : 'Unknown size'})`;
                 viewer.open([]);
+                
+                // Hide color profile panel for unconverted slides
+                if (colorProfilePanel) {
+                    colorProfilePanel.style.display = 'none';
+                }
             }
         } catch (error) {
             console.error('Error handling slide selection:', error);
@@ -144,4 +254,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Initialize
     loadSlides();
+    loadColorProfiles();
+    loadStandardProfiles();
 });

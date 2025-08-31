@@ -53,7 +53,9 @@ class VipsConfig {
       overlap = 1,
       quality = 80,
       layout = 'dz',
-      suffix = '.jpg'
+      suffix = '.jpg',
+      preserveProfile = false,
+      intent = 'perceptual'
     } = options;
 
     // Use basic VIPS command for now - add optimizations gradually
@@ -62,6 +64,9 @@ class VipsConfig {
     command += ` --suffix ${suffix}[Q=${quality}]`;
     command += ` --overlap ${overlap}`;
     command += ` --tile-size ${tileSize}`;
+    
+    // Note: Color management options --profile and --intent are not supported in all VIPS versions
+    // VIPS will automatically preserve embedded profiles when available
     
     return command;
   }
