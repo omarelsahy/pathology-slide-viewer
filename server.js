@@ -455,6 +455,69 @@ if (config.isServerMode()) {
   });
 }
 
+// API endpoint to delete a slide
+app.delete('/api/slides/:filename', async (req, res) => {
+  const filename = req.params.filename;
+  
+  if (config.isClientMode()) {
+    // Proxy deletion request to lab server
+    try {
+      const result = await labClient.deleteSlide(filename);
+      res.json(result);
+    } catch (error) {
+      res.status(503).json({ error: 'Lab server unavailable', details: error.message });
+    }
+    return;
+  }
+
+  // Server mode - delete slide and associated files
+  try {
+    const baseName = path.basename(filename, path.extname(filename));
+    const slidePath = path.join(config.slidesDir, filename);
+    const dziPath = path.join(config.dziDir, `${baseName}.dzi`);
+    const tilesDir = path.join(config.dziDir, `${baseName}_files`);
+    
+    let deletedFiles = [];
+    
+    // Delete original slide file
+    if (fs.existsSync(slidePath)) {
+      fs.unlinkSync(slidePath);
+      deletedFiles.push('original');
+    }
+    
+    // Delete DZI file
+    if (fs.existsSync(dziPath)) {
+      fs.unlinkSync(dziPath);
+      deletedFiles.push('dzi');
+    }
+    
+    // Delete tiles directory
+    if (fs.existsSync(tilesDir)) {
+      fs.rmSync(tilesDir, { recursive: true, force: true });
+      deletedFiles.push('tiles');
+    }
+    
+    console.log(`Deleted slide: ${filename} (${deletedFiles.join(', ')})`);
+    
+    // Broadcast deletion to WebSocket clients
+    broadcastToClients({
+      type: 'slide_deleted',
+      filename: baseName,
+      deletedComponents: deletedFiles
+    });
+    
+    res.json({ 
+      message: 'Slide deleted successfully', 
+      filename: baseName,
+      deletedComponents: deletedFiles 
+    });
+    
+  } catch (error) {
+    console.error('Error deleting slide:', error);
+    res.status(500).json({ error: 'Failed to delete slide', details: error.message });
+  }
+});
+
 // API endpoint to convert SVS to DZI
 app.post('/api/convert/:filename', async (req, res) => {
   const filename = req.params.filename;
