@@ -56,12 +56,16 @@ class VipsConfig {
       suffix = '.jpg'
     } = options;
 
-    // Use basic VIPS command for now - add optimizations gradually
+    // Optimized VIPS command for large files and server hardware
     let command = `vips dzsave "${inputPath}" "${outputPath}"`;
     command += ` --layout ${layout}`;
     command += ` --suffix ${suffix}[Q=${quality}]`;
     command += ` --overlap ${overlap}`;
     command += ` --tile-size ${tileSize}`;
+    
+    // Add streaming and memory optimizations for large files
+    command += ` --strip`; // Remove metadata to reduce memory usage
+    command += ` --compression jpeg`; // Explicit compression
     
     return command;
   }

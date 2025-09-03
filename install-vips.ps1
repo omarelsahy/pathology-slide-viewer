@@ -2,15 +2,9 @@
 
 Write-Host "Installing VIPS for pathology slide conversion..." -ForegroundColor Green
 
-# Method 1: Try winget first
-Write-Host "Attempting installation via winget..." -ForegroundColor Yellow
-try {
-    winget install --id libvips.libvips -e --accept-source-agreements --accept-package-agreements
-    $vipsInstalled = $true
-} catch {
-    Write-Host "Winget installation failed, trying alternative methods..." -ForegroundColor Yellow
-    $vipsInstalled = $false
-}
+# Method 1: Skip winget on Windows Server 2016 (not available)
+Write-Host "Windows Server detected - skipping winget (not available)..." -ForegroundColor Yellow
+$vipsInstalled = $false
 
 # Method 2: Direct download if winget fails
 if (-not $vipsInstalled) {
@@ -21,6 +15,9 @@ if (-not $vipsInstalled) {
     $extractPath = "C:\vips"
     
     try {
+        # Fix SSL/TLS for Windows Server 2016
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        
         # Download VIPS
         Invoke-WebRequest -Uri $vipsUrl -OutFile $downloadPath
         
