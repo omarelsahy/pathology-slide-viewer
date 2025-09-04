@@ -8,27 +8,28 @@ const { exec } = require('child_process');
 const config = require('./config');
 const AutoProcessor = require('./autoProcessor');
 const VipsConfig = require('./vips-config');
+const SlideMetadataExtractor = require('./slideMetadataExtractor');
 const LabServerClient = require('./services/labServerClient');
 
 const app = express();
 const PORT = config.port;
-
-// Initialize components based on mode
-let vipsConfig, labClient, autoProcessor;
+let vipsConfig, labClient, autoProcessor, metadataExtractor;
 
 if (config.isServerMode()) {
-  // Initialize VIPS configuration for lab server
+  // Initialize VIPS configuration and metadata extractor for lab server
   vipsConfig = new VipsConfig();
+  metadataExtractor = new SlideMetadataExtractor(config);
 } else {
   // Initialize lab server client for home computer
   labClient = new LabServerClient(config);
 }
 
 // Middleware
-app.use(cors({
-  origin: config.corsOrigins,
-  credentials: true
-}));
+// Allow dynamic origins in server mode to support access via IP/hostname
+const corsOptions = config.isServerMode()
+  ? { origin: (origin, callback) => callback(null, true), credentials: true }
+  : { origin: config.corsOrigins, credentials: true };
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // API Authentication middleware for server mode
@@ -42,13 +43,8 @@ if (config.isServerMode()) {
   });
 }
 
-// Static files
-if (config.isServerMode()) {
-  app.use(express.static(path.join(__dirname, 'public')));
-} else {
-  // In client mode, serve UI but proxy slide data
-  app.use(express.static(path.join(__dirname, 'public')));
-}
+// Backend server - only serve API endpoints, no static files
+// Static files are now served by the separate frontend server on port 3002
 
 // Create necessary directories based on mode
 if (config.isServerMode()) {
@@ -67,15 +63,30 @@ if (config.isServerMode()) {
   });
 }
 
-// SVS to DZI conversion function
+// SVS to DZI conversion function with metadata extraction
 function convertSvsToDzi(svsPath, outputName) {
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
     const outputPath = path.join(config.dziDir, outputName);
     const startTime = Date.now();
     
     // Get original file stats
     const originalStats = fs.statSync(svsPath);
     const originalSize = originalStats.size;
+    
+    // Step 1: Extract metadata (preparation step)
+    let metadata = null;
+    let extractedIccProfile = null;
+    
+    try {
+      console.log(`\n=== PREPARATION STEP: METADATA EXTRACTION ===`);
+      metadata = await metadataExtractor.extractMetadata(svsPath, outputName);
+      extractedIccProfile = metadata.iccProfile;
+      console.log(`Metadata extraction completed`);
+      console.log(`==============================================\n`);
+    } catch (error) {
+      console.warn(`Metadata extraction failed: ${error.message}`);
+      console.log(`Proceeding with conversion without extracted metadata\n`);
+    }
     
     // Check for existing tile folder
     const tilesDir = `${outputPath}_files`;
@@ -111,7 +122,9 @@ function convertSvsToDzi(svsPath, outputName) {
     const command = vipsConfig.getOptimizedCommand(svsPath, outputPath, {
       tileSize: 256,
       overlap: 1,
-      quality: 90
+      quality: 90,
+      iccProfile: extractedIccProfile,  // Use extracted ICC profile
+      embedIcc: false // transform colors but do not embed ICC in each tile to keep size small
     });
     
     // Set optimized environment variables for VIPS
@@ -131,11 +144,48 @@ function convertSvsToDzi(svsPath, outputName) {
     console.log(`Command: ${command}`);
     console.log(`========================\n`);
     
+    // Periodic progress broadcaster: count generated tiles while conversion runs
+    let progressTimer = null;
+    const startProgress = () => {
+      try {
+        // Start polling every 3s
+        progressTimer = setInterval(() => {
+          try {
+            let created = 0;
+            if (fs.existsSync(tilesDir)) {
+              const walkCount = (dir) => {
+                let count = 0;
+                const files = fs.readdirSync(dir);
+                for (const f of files) {
+                  const p = path.join(dir, f);
+                  const st = fs.statSync(p);
+                  if (st.isDirectory()) count += walkCount(p);
+                  else if (f.endsWith('.jpg') || f.endsWith('.jpeg')) count++;
+                }
+                return count;
+              };
+              created = walkCount(tilesDir);
+            }
+            const elapsedMs = Date.now() - startTime;
+            broadcastToClients({
+              type: 'conversion_progress',
+              filename: outputName,
+              tilesCreated: created,
+              elapsedMs
+            });
+          } catch (_) { /* noop */ }
+        }, 3000);
+      } catch (_) { /* noop */ }
+    };
+
+    startProgress();
+
     exec(command, { env: vipsEnv, maxBuffer: 1024 * 1024 * 10 }, (error, stdout, stderr) => {
       const endTime = Date.now();
       const duration = endTime - startTime;
-      
+
       if (error) {
+        if (progressTimer) clearInterval(progressTimer);
         console.error(`\n=== CONVERSION FAILED ===`);
         console.error(`Error: ${error}`);
         console.error(`Duration: ${(duration / 1000).toFixed(1)} seconds`);
@@ -148,7 +198,8 @@ function convertSvsToDzi(svsPath, outputName) {
         return;
       }
       
-      // Calculate conversion metrics
+      // Stop progress timer and calculate conversion metrics
+      if (progressTimer) clearInterval(progressTimer);
       const dziPath = `${outputPath}.dzi`;
       const tilesDir = `${outputPath}_files`;
       
@@ -247,6 +298,17 @@ function convertSvsToDzi(svsPath, outputName) {
       console.log(`VIPS memory limit: ${Math.floor(parseInt(vipsEnv.VIPS_CACHE_MAX_MEMORY) / (1024 * 1024))} MB`);
       console.log(`End time: ${new Date(endTime).toLocaleTimeString()}`);
       console.log(`============================\n`);
+
+      // Final progress broadcast with completion flag
+      try {
+        broadcastToClients({
+          type: 'conversion_progress',
+          filename: outputName,
+          tilesCreated: finalTileCount,
+          elapsedMs: duration,
+          done: true
+        });
+      } catch (_) { /* noop */ }
       
       resolve({
         dziPath,
@@ -317,10 +379,7 @@ function convertWithSharp(svsPath, outputName, startTime, originalSize) {
   });
 }
 
-// Routes
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
+// Backend API server - no static routes, only API endpoints
 
 // API endpoint to list available slides
 app.get('/api/slides', async (req, res) => {
@@ -454,6 +513,69 @@ if (config.isServerMode()) {
     }
   });
 }
+
+// API endpoint to delete a slide
+app.delete('/api/slides/:filename', async (req, res) => {
+  const filename = req.params.filename;
+  
+  if (config.isClientMode()) {
+    // Proxy deletion request to lab server
+    try {
+      const result = await labClient.deleteSlide(filename);
+      res.json(result);
+    } catch (error) {
+      res.status(503).json({ error: 'Lab server unavailable', details: error.message });
+    }
+    return;
+  }
+
+  // Server mode - delete slide and associated files
+  try {
+    const baseName = path.basename(filename, path.extname(filename));
+    const slidePath = path.join(config.slidesDir, filename);
+    const dziPath = path.join(config.dziDir, `${baseName}.dzi`);
+    const tilesDir = path.join(config.dziDir, `${baseName}_files`);
+    
+    let deletedFiles = [];
+    
+    // Delete original slide file
+    if (fs.existsSync(slidePath)) {
+      fs.unlinkSync(slidePath);
+      deletedFiles.push('original');
+    }
+    
+    // Delete DZI file
+    if (fs.existsSync(dziPath)) {
+      fs.unlinkSync(dziPath);
+      deletedFiles.push('dzi');
+    }
+    
+    // Delete tiles directory
+    if (fs.existsSync(tilesDir)) {
+      fs.rmSync(tilesDir, { recursive: true, force: true });
+      deletedFiles.push('tiles');
+    }
+    
+    console.log(`Deleted slide: ${filename} (${deletedFiles.join(', ')})`);
+    
+    // Broadcast deletion to WebSocket clients
+    broadcastToClients({
+      type: 'slide_deleted',
+      filename: baseName,
+      deletedComponents: deletedFiles
+    });
+    
+    res.json({ 
+      message: 'Slide deleted successfully', 
+      filename: baseName,
+      deletedComponents: deletedFiles 
+    });
+    
+  } catch (error) {
+    console.error('Error deleting slide:', error);
+    res.status(500).json({ error: 'Failed to delete slide', details: error.message });
+  }
+});
 
 // API endpoint to convert SVS to DZI
 app.post('/api/convert/:filename', async (req, res) => {

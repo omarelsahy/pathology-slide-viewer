@@ -8,9 +8,9 @@ class Config {
     
     // Define all default ports in one place (single source of truth)
     this.defaultPorts = {
-      server: 3001,
-      client: 3001,
-      labServer: 3001
+      server: 3101,    // Backend API server
+      client: 3102,    // Frontend development server
+      labServer: 3101
     };
     
     // Common configuration
@@ -34,7 +34,7 @@ class Config {
     // Lab server configuration
     this.allowRemoteConnections = true;
     this.corsOrigins = [
-      `http://localhost:${this.defaultPorts.client}`, // Home development
+      `http://localhost:${this.defaultPorts.client}`, // Frontend development server
       process.env.HOME_CLIENT_URL || '*' // Allow home computer access
     ];
     

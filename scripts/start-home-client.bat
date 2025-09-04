@@ -5,16 +5,15 @@ echo.
 REM Set environment variables for home client
 set NODE_MODE=client
 set NODE_ENV=development
-REM PORT will be read from .env file or use config.js default
+REM Force frontend port to 3102
+set PORT=3102
 
 REM Check if .env file exists, create from example if not
 if not exist ".env" (
     echo Creating .env file from .env.example...
     copy ".env.example" ".env"
     echo.
-    echo IMPORTANT: Please edit .env file with your lab server URL and API key!
-    echo Press any key to continue after editing .env...
-    pause
+    echo NOTE: Update .env later with lab server URL and API key if needed. Continuing...
 )
 
 echo Configuration:
@@ -23,4 +22,4 @@ echo - Port: %PORT%
 echo - Connects to lab server for slides and processing
 echo.
 
-node server.js
+node frontend-server.js

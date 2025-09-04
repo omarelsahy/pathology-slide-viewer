@@ -53,13 +53,46 @@ class VipsConfig {
       overlap = 1,
       quality = 80,
       layout = 'dz',
-      suffix = '.jpg'
+      suffix = '.jpg',
+      iccProfile = null,
+      embedIcc = true
     } = options;
 
-    // Use basic VIPS command for now - add optimizations gradually
+    // Base VIPS command
     let command = `vips dzsave "${inputPath}" "${outputPath}"`;
     command += ` --layout ${layout}`;
-    command += ` --suffix ${suffix}[Q=${quality}]`;
+    
+    // Handle ICC: Option A - transform to sRGB using embedded input profile, then strip from output tiles
+    const fs = require('fs');
+    let suffixOptions = `Q=${quality}`;
+
+    // Common Windows sRGB profile locations
+    const sRgbCandidates = [
+      'C:\\Windows\\System32\\spool\\drivers\\color\\sRGB Color Space Profile.icm',
+      'C:\\Windows\\System32\\spool\\drivers\\color\\sRGB IEC61966-2.1.icm',
+      'C:\\Windows\\System32\\spool\\drivers\\color\\sRGB_v4_ICC_preference.icc'
+    ];
+    const sRgbProfile = sRgbCandidates.find(p => {
+      try { return fs.existsSync(p); } catch { return false; }
+    }) || null;
+
+    if (sRgbProfile) {
+      const ts = Date.now();
+      const tempTiff = `temp_srgb_${ts}.tiff`;
+      // Use --embedded to use input's embedded profile as source, convert to sRGB
+      command = `vips icc_transform "${inputPath}" "${tempTiff}" "${sRgbProfile}" --embedded && vips dzsave "${tempTiff}" "${outputPath}"`;
+      command += ` --layout ${layout}`;
+      // Always strip profiles from tiles for size/perf
+      suffixOptions += ',strip';
+      // Ensure cleanup
+      command += ` && del "${tempTiff}"`;
+    } else {
+      // No sRGB profile found, proceed without transform but strip profiles
+      suffixOptions += ',strip';
+    }
+    // If embedIcc is true, we still avoid embedding to reduce tile size (Option A)
+    
+    command += ` --suffix ${suffix}[${suffixOptions}]`;
     command += ` --overlap ${overlap}`;
     command += ` --tile-size ${tileSize}`;
     
