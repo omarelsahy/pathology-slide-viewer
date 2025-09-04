@@ -9,7 +9,13 @@
     "frontend": "set PORT=3102 && node frontend-server.js",
     "backend": "set PORT=3101 && node server.js",
     "dev:frontend": "set PORT=3102 && nodemon frontend-server.js",
-    "dev:backend": "set PORT=3101 && nodemon server.js"
+    "dev:backend": "set PORT=3101 && nodemon server.js",
+    "tile-service": "set TILE_PORT=3101 && node tile-service.js",
+    "conversion-service": "set CONVERSION_PORT=3103 && node conversion-service.js",
+    "dev:tile-service": "set TILE_PORT=3101 && nodemon tile-service.js",
+    "dev:conversion-service": "set CONVERSION_PORT=3103 && nodemon conversion-service.js",
+    "start:all": "concurrently \"npm run frontend\" \"npm run tile-service\" \"npm run conversion-service\"",
+    "dev:all": "concurrently \"npm run dev:frontend\" \"npm run dev:tile-service\" \"npm run dev:conversion-service\""
   },
   "dependencies": {
     "child_process": "^1.0.2",
@@ -19,11 +25,11 @@
     "express": "^4.18.2",
     "multer": "^1.4.5-lts.1",
     "node-fetch": "^2.6.7",
-    "openslide": "^0.2.0",
     "sharp": "^0.33.2",
     "ws": "^8.16.0"
   },
   "devDependencies": {
+    "concurrently": "^8.2.2",
     "nodemon": "^3.0.2"
   }
 }

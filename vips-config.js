@@ -168,6 +168,78 @@ class VipsConfig {
       }
     };
   }
+
+  // Check VIPS threading capabilities and actual usage
+  async checkThreadingSupport() {
+    return new Promise((resolve) => {
+      exec('vips --vips-config', (error, stdout, stderr) => {
+        if (error) {
+          resolve({ 
+            available: false, 
+            reason: 'VIPS not found or error checking config',
+            error: error.message 
+          });
+          return;
+        }
+        
+        const config = stdout.toLowerCase();
+        
+        // Check for threading support indicators
+        const hasOpenMP = config.includes('openmp') || config.includes('omp');
+        const hasThreads = config.includes('threads') || config.includes('thread');
+        const hasConcurrency = config.includes('concurrency');
+        
+        // Look for specific threading libraries
+        const threadingLibraries = [];
+        if (config.includes('openmp')) threadingLibraries.push('OpenMP');
+        if (config.includes('glib')) threadingLibraries.push('GLib');
+        if (config.includes('pthread')) threadingLibraries.push('pthreads');
+        
+        resolve({
+          available: hasOpenMP || hasThreads || hasConcurrency,
+          openmp: hasOpenMP,
+          threads: hasThreads,
+          concurrency: hasConcurrency,
+          libraries: threadingLibraries,
+          rawConfig: stdout,
+          configured: threadingLibraries.length > 0
+        });
+      });
+    });
+  }
+
+  // Test actual thread usage during a simple VIPS operation
+  async testActualThreadUsage() {
+    return new Promise((resolve) => {
+      // Create a simple test that should use multiple threads
+      const testCommand = `vips black test_threading.tiff 1000 1000 --bands 3 && vips dzsave test_threading.tiff test_threading_dz --tile-size 256 && del test_threading.tiff && rmdir /s /q test_threading_dz_files && del test_threading_dz.dzi`;
+      
+      const startTime = Date.now();
+      const env = { ...process.env, ...this.getEnvironmentVars() };
+      
+      exec(testCommand, { env }, (error, stdout, stderr) => {
+        const duration = Date.now() - startTime;
+        
+        if (error) {
+          resolve({
+            success: false,
+            error: error.message,
+            duration,
+            threadsConfigured: this.optimalThreads
+          });
+          return;
+        }
+        
+        resolve({
+          success: true,
+          duration,
+          threadsConfigured: this.optimalThreads,
+          output: stdout,
+          stderr: stderr
+        });
+      });
+    });
+  }
 }
 
 module.exports = VipsConfig;

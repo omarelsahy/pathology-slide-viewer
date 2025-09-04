@@ -89,6 +89,23 @@ temp/
 public/*_files/
 public/*.dzi
 
+# VIPS optimization temporary files
+temp_*.tiff
+temp_*.png
+*-config.txt
+vips-performance-*.json
+lab-performance-diagnostic-*.json
+
+# Large test images
+test_main.jpg
+
+# Test slide processing artifacts
+public/dzi/metadata/undefined*
+
+# Failed installation experiments
+install-msys2-vips.ps1
+investigate-msys2-vips.js
+
 # Safety allowlists
 !public/index.html
 !public/js/
