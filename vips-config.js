@@ -78,14 +78,16 @@ class VipsConfig {
 
     if (sRgbProfile) {
       const ts = Date.now();
-      const tempTiff = `temp_srgb_${ts}.tiff`;
-      // Use --embedded to use input's embedded profile as source, convert to sRGB
-      command = `vips icc_transform "${inputPath}" "${tempTiff}" "${sRgbProfile}" --embedded && vips dzsave "${tempTiff}" "${outputPath}"`;
+      const tempVips = `temp_srgb_${ts}.v`;
+      // Use --embedded to use input's embedded profile as source, convert to sRGB.
+      // Read input sequentially to reduce memory pressure and write to VIPS native format (.v)
+      const inWithOpts = `${inputPath}[access=sequential]`;
+      command = `vips icc_transform "${inWithOpts}" "${tempVips}" "${sRgbProfile}" --embedded && vips dzsave "${tempVips}" "${outputPath}"`;
       command += ` --layout ${layout}`;
       // Always strip profiles from tiles for size/perf
       suffixOptions += ',strip';
-      // Ensure cleanup
-      command += ` && del "${tempTiff}"`;
+      // Ensure cleanup of temp
+      command += ` && del "${tempVips}"`;
     } else {
       // No sRGB profile found, proceed without transform but strip profiles
       suffixOptions += ',strip';

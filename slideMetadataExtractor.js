@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { exec } = require('child_process');
 
 class SlideMetadataExtractor {
@@ -26,6 +27,9 @@ class SlideMetadataExtractor {
     console.log(`\n=== METADATA EXTRACTION STARTED ===`);
     console.log(`File: ${path.basename(slidePath)}`);
     console.log(`Base name: ${baseName}`);
+    const t0 = Date.now();
+    const mem0 = process.memoryUsage();
+    console.log(`Process RSS: ${(mem0.rss/1024/1024).toFixed(1)} MB | HeapUsed: ${(mem0.heapUsed/1024/1024).toFixed(1)} MB | OS free: ${(os.freemem()/1024/1024/1024).toFixed(1)} GB`);
     
     const metadata = {
       slidePath,
@@ -39,27 +43,80 @@ class SlideMetadataExtractor {
     };
 
     try {
-      // Extract slide properties using OpenSlide
+      // Extract slide properties quickly using vipsheader
       const properties = await this.extractSlideProperties(slidePath);
       metadata.properties = properties;
+      console.log(`Properties extracted in ${((Date.now() - t0)/1000).toFixed(2)}s (openslideSupported=${!!properties.openslideSupported}, assoc=[${(properties.associatedImages||[]).join(', ')}])`);
 
-      // Extract ICC profile
-      const iccPath = await this.extractICCProfile(slidePath, baseName);
-      metadata.iccProfile = iccPath;
+      // Extract ICC profile (skip if already present on disk)
+      const iccPathCandidate = path.join(this.metadataDir, `${baseName}.icc`);
+      if (fs.existsSync(iccPathCandidate) && fs.statSync(iccPathCandidate).size > 0) {
+        console.log(`ICC profile already exists, skipping extraction: ${iccPathCandidate}`);
+        metadata.iccProfile = iccPathCandidate;
+      } else {
+        const tIcc0 = Date.now();
+        const iccPath = await this.extractICCProfile(slidePath, baseName);
+        const tIcc1 = Date.now();
+        console.log(`ICC extraction ${iccPath ? 'succeeded' : 'skipped/failed'} in ${((tIcc1 - tIcc0)/1000).toFixed(2)}s`);
+        metadata.iccProfile = iccPath;
+      }
 
-      // Extract label image
-      const labelPath = await this.extractLabelImage(slidePath, baseName);
-      metadata.label = labelPath;
+      // Discover associated images more robustly (vipsheader -> openslide-show-properties -> probing)
+      let assoc = (properties.associatedImages || []).map(s => s.toLowerCase());
+      if (assoc.length === 0) {
+        try {
+          const discovered = await this.discoverAssociatedImages(slidePath);
+          if (discovered && discovered.length) {
+            assoc = discovered.map(s => s.toLowerCase());
+            metadata.properties.associatedImages = discovered; // persist
+            console.log(`Associated images discovered: ${discovered.join(', ')}`);
+          }
+        } catch (_) { /* noop */ }
+      }
+      const assocUnknown = assoc.length === 0;
 
-      // Extract macro image
-      const macroPath = await this.extractMacroImage(slidePath, baseName);
-      metadata.macro = macroPath;
+      // Conditionally extract label and macro only if present
+      const labelPathCandidate = path.join(this.metadataDir, `${baseName}_label.jpg`);
+      const macroPathCandidate = path.join(this.metadataDir, `${baseName}_macro.jpg`);
+
+      if (assoc.includes('label')) {
+        if (fs.existsSync(labelPathCandidate) && fs.statSync(labelPathCandidate).size > 0) {
+          console.log(`Label image already exists, skipping extraction: ${labelPathCandidate}`);
+          metadata.label = labelPathCandidate;
+        } else {
+          const labelPath = await this.extractLabelImage(slidePath, baseName);
+          metadata.label = labelPath;
+        }
+      } else if (assocUnknown) {
+        console.log(`Associated images not advertised; attempting best-effort label extraction (aliases).`);
+        metadata.label = await this.extractAssociatedWithAliases(slidePath, baseName, 'label', ['label', 'slide label', 'label image', 'thumbnail']);
+      } else {
+        console.log(`No 'label' associated image advertised by OpenSlide; skipping extraction.`);
+      }
+
+      if (assoc.includes('macro')) {
+        if (fs.existsSync(macroPathCandidate) && fs.statSync(macroPathCandidate).size > 0) {
+          console.log(`Macro image already exists, skipping extraction: ${macroPathCandidate}`);
+          metadata.macro = macroPathCandidate;
+        } else {
+          const macroPath = await this.extractMacroImage(slidePath, baseName);
+          metadata.macro = macroPath;
+        }
+      } else if (assocUnknown) {
+        console.log(`Associated images not advertised; attempting best-effort macro extraction (aliases).`);
+        metadata.macro = await this.extractAssociatedWithAliases(slidePath, baseName, 'macro', ['macro', 'overview', 'macro image', 'thumbnail']);
+      } else {
+        console.log(`No 'macro' associated image advertised by OpenSlide; skipping extraction.`);
+      }
 
       // Save metadata to JSON file
       const metadataPath = path.join(this.metadataDir, `${baseName}_metadata.json`);
       fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
       
-      console.log(`=== METADATA EXTRACTION COMPLETED ===`);
+      const dt = Date.now() - t0;
+      const mem1 = process.memoryUsage();
+      console.log(`Memory after metadata: RSS ${(mem1.rss/1024/1024).toFixed(1)} MB | HeapUsed ${(mem1.heapUsed/1024/1024).toFixed(1)} MB | OS free ${(os.freemem()/1024/1024/1024).toFixed(1)} GB`);
+      console.log(`=== METADATA EXTRACTION COMPLETED (${(dt/1000).toFixed(1)}s) ===`);
       console.log(`ICC Profile: ${metadata.iccProfile ? 'Extracted' : 'Not found'}`);
       console.log(`Label: ${metadata.label ? 'Extracted' : 'Not found'}`);
       console.log(`Macro: ${metadata.macro ? 'Extracted' : 'Not found'}`);
@@ -78,23 +135,39 @@ class SlideMetadataExtractor {
    * Extract slide properties using VIPS
    */
   async extractSlideProperties(slidePath) {
-    return new Promise((resolve, reject) => {
-      // Use VIPS to get basic slide info - just load and get basic properties
+    return new Promise((resolve) => {
       const basicInfo = this.getBasicFileInfo(slidePath);
-      
-      // Try to get additional OpenSlide properties if available
-      const command = `vips openslideload "${slidePath}" temp_props.tiff && del temp_props.tiff`;
-      
-      exec(command, (error, stdout, stderr) => {
+
+      // Use vipsheader -a to list all available header/properties quickly (no temp files)
+      const command = `vipsheader -a "${slidePath}"`;
+      exec(command, { maxBuffer: 1024 * 1024 * 16, timeout: 60_000 }, (error, stdout, stderr) => {
         if (error) {
-          console.warn(`Could not load slide with OpenSlide: ${error.message}`);
+          console.warn(`vipsheader failed (${error.message}); returning basic info`);
+          if (stderr) console.warn(`vipsheader stderr: ${stderr.substring(0, 2000)}`);
           resolve(basicInfo);
           return;
         }
 
-        // If successful, we know it's a valid OpenSlide file
-        basicInfo.openslideSupported = true;
-        resolve(basicInfo);
+        const props = this.parseVipsHeader(stdout);
+        if (!stdout || !stdout.trim()) {
+          console.warn(`vipsheader produced empty output; proceeding with basic info`);
+        }
+        // Derive associated images list if present in known keys
+        const assocStr = props['openslide.associated-images']
+          || props['openslide.associated_images']
+          || props['openslide.associatedimages']
+          || '';
+        const associatedImages = String(assocStr)
+          .split(',')
+          .map(s => s.trim())
+          .filter(Boolean);
+
+        resolve({
+          ...basicInfo,
+          openslideSupported: Boolean(Object.keys(props).some(k => k.startsWith('openslide.'))),
+          associatedImages,
+          raw: props
+        });
       });
     });
   }
@@ -228,9 +301,10 @@ class SlideMetadataExtractor {
       // Try to extract label using VIPS with correct syntax
       const extractCommand = `vips openslideload "${slidePath}" "${labelOutputPath}" --associated=label`;
       
-      exec(extractCommand, (extractError) => {
+      exec(extractCommand, { timeout: 120_000 }, (extractError, stdout, stderr) => {
         if (extractError || !fs.existsSync(labelOutputPath)) {
           console.log(`No label image found in ${path.basename(slidePath)}`);
+          if (extractError && stderr) console.log(`label stderr: ${stderr.substring(0, 1000)}`);
           resolve(null);
         } else {
           console.log(`Label image extracted: ${labelOutputPath}`);
@@ -250,9 +324,10 @@ class SlideMetadataExtractor {
       // Try to extract macro using VIPS with correct syntax
       const extractCommand = `vips openslideload "${slidePath}" "${macroOutputPath}" --associated=macro`;
       
-      exec(extractCommand, (extractError) => {
+      exec(extractCommand, { timeout: 120_000 }, (extractError, stdout, stderr) => {
         if (extractError || !fs.existsSync(macroOutputPath)) {
           console.log(`No macro image found in ${path.basename(slidePath)}`);
+          if (extractError && stderr) console.log(`macro stderr: ${stderr.substring(0, 1000)}`);
           resolve(null);
         } else {
           console.log(`Macro image extracted: ${macroOutputPath}`);
@@ -260,6 +335,92 @@ class SlideMetadataExtractor {
         }
       });
     });
+  }
+
+  /**
+   * Extract associated image with aliases
+   */
+  async extractAssociatedWithAliases(slidePath, baseName, kind, aliases) {
+    for (const alias of aliases) {
+      const safeSuffix = kind.toLowerCase();
+      const outPath = path.join(this.metadataDir, `${baseName}_${safeSuffix}.jpg`);
+      const cmd = `vips openslideload "${slidePath}" "${outPath}" --associated=${JSON.stringify(alias).slice(1, -1)}`;
+      const ok = await new Promise((resolve) => {
+        exec(cmd, { timeout: 90_000 }, (err) => {
+          if (!err && fs.existsSync(outPath) && fs.statSync(outPath).size > 0) {
+            resolve(true);
+          } else {
+            // cleanup failed attempt
+            if (fs.existsSync(outPath)) {
+              try { fs.unlinkSync(outPath); } catch(_) {}
+            }
+            resolve(false);
+          }
+        });
+      });
+      if (ok) {
+        console.log(`Associated image '${kind}' extracted via alias '${alias}': ${outPath}`);
+        return outPath;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Discover associated image names using multiple strategies:
+   * 1) vipsheader -a (already parsed in extractSlideProperties)
+   * 2) openslide-show-properties (if available on PATH)
+   * 3) Probe a broader alias list and record which exist
+   */
+  async discoverAssociatedImages(slidePath) {
+    // Strategy 2: openslide-show-properties
+    const candidates = new Set();
+    const tryShowProps = () => new Promise((resolve) => {
+      const cmd = `openslide-show-properties "${slidePath}"`;
+      exec(cmd, { timeout: 60_000, maxBuffer: 1024 * 1024 * 8 }, (err, stdout) => {
+        if (err || !stdout) return resolve([]);
+        const lines = stdout.split(/\r?\n/);
+        for (const line of lines) {
+          // Example: openslide.associated-images: label,macro
+          const idx = line.indexOf('openslide.associated');
+          if (idx >= 0 && line.includes(':')) {
+            const parts = line.split(':');
+            const v = (parts.slice(1).join(':') || '').trim();
+            v.split(',').map(s => s.trim()).filter(Boolean).forEach(x => candidates.add(x));
+          }
+        }
+        resolve(Array.from(candidates));
+      });
+    });
+
+    const fromShowProps = await tryShowProps();
+    if (fromShowProps.length) return fromShowProps;
+
+    // Strategy 3: probe a broad alias set
+    const aliasGroups = [
+      ['label', 'slide label', 'label image', 'thumbnail', 'labelimage'],
+      ['macro', 'overview', 'macro image', 'thumbnail', 'overview image'],
+    ];
+
+    const discovered = new Set();
+    for (const group of aliasGroups) {
+      for (const name of group) {
+        const tmp = path.join(this.metadataDir, `__probe_${Date.now()}_${Math.random().toString(36).slice(2)}.jpg`);
+        const cmd = `vips openslideload "${slidePath}" "${tmp}" --associated=${JSON.stringify(name).slice(1, -1)}`;
+        const ok = await new Promise((resolve) => {
+          exec(cmd, { timeout: 30_000 }, (err) => {
+            if (!err && fs.existsSync(tmp) && fs.statSync(tmp).size > 0) {
+              resolve(true);
+            } else {
+              resolve(false);
+            }
+          });
+        });
+        try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch(_) {}
+        if (ok) discovered.add(name);
+      }
+    }
+    return Array.from(discovered);
   }
 
   /**
@@ -272,7 +433,8 @@ class SlideMetadataExtractor {
     for (const line of lines) {
       if (line.includes(':')) {
         const [key, value] = line.split(':', 2);
-        properties[key.trim()] = value.trim();
+        // keep original key casing; trim whitespace
+        properties[key.trim()] = (value ?? '').trim();
       }
     }
     

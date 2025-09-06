@@ -29,6 +29,7 @@ if (config.isServerMode()) {
 const corsOptions = config.isServerMode()
   ? { origin: (origin, callback) => callback(null, true), credentials: true }
   : { origin: config.corsOrigins, credentials: true };
+
 app.use(cors(corsOptions));
 app.use(express.json());
 
@@ -296,6 +297,12 @@ function convertSvsToDzi(svsPath, outputName) {
       console.log(`Processing rate: ${(originalSize / 1024 / 1024 / (duration / 1000)).toFixed(1)} MB/second`);
       console.log(`VIPS threads used: ${vipsEnv.VIPS_CONCURRENCY}`);
       console.log(`VIPS memory limit: ${Math.floor(parseInt(vipsEnv.VIPS_CACHE_MAX_MEMORY) / (1024 * 1024))} MB`);
+      if (vipsEnv.VIPS_BUFFER_SIZE) {
+        console.log(`VIPS buffer size: ${Math.floor(parseInt(vipsEnv.VIPS_BUFFER_SIZE) / (1024 * 1024))} MB`);
+      }
+      if (vipsEnv.VIPS_TMPDIR) {
+        console.log(`VIPS temp dir: ${vipsEnv.VIPS_TMPDIR}`);
+      }
       console.log(`End time: ${new Date(endTime).toLocaleTimeString()}`);
       console.log(`============================\n`);
 
@@ -411,6 +418,13 @@ app.get('/api/slides', async (req, res) => {
         const baseName = path.basename(file, path.extname(file));
         const dziPath = path.join(config.dziDir, `${baseName}.dzi`);
         const hasDzi = fs.existsSync(dziPath);
+        // Metadata-derived assets
+        const metadataDir = path.join(config.dziDir, 'metadata');
+        const labelFs = path.join(metadataDir, `${baseName}_label.jpg`);
+        const macroFs = path.join(metadataDir, `${baseName}_macro.jpg`);
+        const labelUrl = fs.existsSync(labelFs) ? `/dzi/metadata/${baseName}_label.jpg` : null;
+        const macroUrl = fs.existsSync(macroFs) ? `/dzi/metadata/${baseName}_macro.jpg` : null;
+        const thumbnailUrl = macroUrl || labelUrl || null;
         
         slideFiles.push({
           name: baseName,
@@ -418,7 +432,10 @@ app.get('/api/slides', async (req, res) => {
           dziFile: hasDzi ? `/dzi/${baseName}.dzi` : null,
           format: path.extname(file).toLowerCase(),
           converted: hasDzi,
-          size: fs.statSync(path.join(config.slidesDir, file)).size
+          size: fs.statSync(path.join(config.slidesDir, file)).size,
+          labelUrl,
+          macroUrl,
+          thumbnailUrl
         });
       });
   }
@@ -431,13 +448,23 @@ app.get('/api/slides', async (req, res) => {
       const existing = slideFiles.find(slide => slide.name === baseName);
       
       if (!existing) {
+        // Metadata-derived assets for standalone DZI
+        const metadataDir = path.join(config.dziDir, 'metadata');
+        const labelFs = path.join(metadataDir, `${baseName}_label.jpg`);
+        const macroFs = path.join(metadataDir, `${baseName}_macro.jpg`);
+        const labelUrl = fs.existsSync(labelFs) ? `/dzi/metadata/${baseName}_label.jpg` : null;
+        const macroUrl = fs.existsSync(macroFs) ? `/dzi/metadata/${baseName}_macro.jpg` : null;
+        const thumbnailUrl = macroUrl || labelUrl || null;
         slideFiles.push({
           name: baseName,
           originalFile: null,
           dziFile: `/dzi/${file}`,
           format: '.dzi',
           converted: true,
-          size: 0
+          size: 0,
+          labelUrl,
+          macroUrl,
+          thumbnailUrl
         });
       }
     });
@@ -500,7 +527,19 @@ app.get('/slides/:filename', async (req, res) => {
 
 // Serve DZI files
 if (config.isServerMode()) {
-  app.use('/dzi', express.static(config.dziDir));
+  // Ensure CORS headers are present on DZI XML and tile JPG responses
+  // Use credentials: false for static so wildcard ACAO is permitted if configured by proxies
+  const dziCors = cors({ origin: (origin, cb) => cb(null, true), credentials: false });
+  // Manual header guard to ensure headers are present even if upstream/proxy interferes
+  const dziHeaders = (req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Range');
+    return req.method === 'OPTIONS' ? res.sendStatus(204) : next();
+  };
+  app.use('/dzi', dziHeaders, dziCors, express.static(config.dziDir));
+  // Explicit preflight
+  app.options('/dzi/*', dziCors, (req, res) => res.sendStatus(204));
 } else {
   // Client mode - proxy DZI requests to lab server
   app.get('/dzi/*', async (req, res) => {
