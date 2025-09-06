@@ -89,6 +89,16 @@ temp/
 public/*_files/
 public/*.dzi
 
-# Safety allowlists
+# Ignore generated data under public
+public/dzi/**
+public/slides/**
+public/dzi/metadata/**
+
+# Keep web app assets and sentinel files
 !public/index.html
 !public/js/
+!public/dzi/.gitkeep
+!public/slides/.gitkeep
+!public/dzi/metadata/.gitkeep
+
+# Safety allowlists
