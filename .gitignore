@@ -51,7 +51,7 @@ __pycache__/
 **/.tox/
 
 # Secrets & env
-.env
+# .env (commented out to allow reading for debugging)
 .env.*
 !.env.example
 

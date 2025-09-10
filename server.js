@@ -2,11 +2,159 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const cors = require('cors');
+const { spawn, exec } = require('child_process');
 const WebSocket = require('ws');
-const { exec } = require('child_process');
+const { Worker } = require('worker_threads');
 const config = require('./config');
-const AutoProcessor = require('./autoProcessor');
+const { workerPool } = require('./workerPool');
+
+// Load VIPS configuration
+require('./vips-config');
+
+let vipsLib = null;
+try {
+  // Optional wasm-vips for in-process pipeline
+  vipsLib = require('wasm-vips');
+} catch (_) { /* wasm-vips not installed; will use CLI */ }
+
+// Cleanup function to remove leftover __delete_ directories
+function cleanupDeleteDirectories() {
+  try {
+    const dziDir = config.dziDir;
+    if (!fs.existsSync(dziDir)) return;
+    
+    const entries = fs.readdirSync(dziDir, { withFileTypes: true });
+    const deleteDirectories = entries.filter(entry => 
+      entry.isDirectory() && entry.name.startsWith('__delete_')
+    );
+    
+    if (deleteDirectories.length > 0) {
+      console.log(`Found ${deleteDirectories.length} leftover __delete_ directories, cleaning up...`);
+      
+      deleteDirectories.forEach(dir => {
+        const deletePath = path.join(dziDir, dir.name);
+        try {
+          if (process.platform === 'win32') {
+            const { exec } = require('child_process');
+            exec(`rmdir /s /q "${deletePath}"`, (error) => {
+              if (error) {
+                console.warn(`Failed to cleanup ${dir.name}:`, error.message);
+              } else {
+                console.log(`Cleaned up: ${dir.name}`);
+              }
+            });
+          } else {
+            fs.rmSync(deletePath, { recursive: true, force: true });
+            console.log(`Cleaned up: ${dir.name}`);
+          }
+        } catch (error) {
+          console.warn(`Failed to cleanup ${dir.name}:`, error.message);
+        }
+      });
+    }
+  } catch (error) {
+    console.warn('Error during __delete_ directory cleanup:', error.message);
+  }
+}
+
+// Helper function to find and kill VIPS processes
+function killVipsProcesses() {
+  return new Promise((resolve) => {
+    const isWindows = process.platform === 'win32';
+    
+    if (isWindows) {
+      // Windows: Use tasklist and taskkill
+      exec('tasklist /FI "IMAGENAME eq vips.exe" /FO CSV', (error, stdout) => {
+        if (error) {
+          console.log('No VIPS processes found or error checking:', error.message);
+          resolve();
+          return;
+        }
+        
+        const lines = stdout.split('\n').slice(1); // Skip header
+        const pids = [];
+        
+        for (const line of lines) {
+          if (line.includes('vips.exe')) {
+            const match = line.match(/"(\d+)"/g);
+            if (match && match[1]) {
+              const pid = match[1].replace(/"/g, '');
+              pids.push(pid);
+            }
+          }
+        }
+        
+        if (pids.length > 0) {
+          console.log(`Found ${pids.length} VIPS processes to terminate: ${pids.join(', ')}`);
+          const killCommand = `taskkill /F /PID ${pids.join(' /PID ')}`;
+          
+          exec(killCommand, (killError, killStdout) => {
+            if (killError) {
+              console.warn('Error killing VIPS processes:', killError.message);
+            } else {
+              console.log('Successfully terminated VIPS processes:', killStdout);
+            }
+            resolve();
+          });
+        } else {
+          console.log('No VIPS processes found to terminate');
+          resolve();
+        }
+      });
+    } else {
+      // Unix-like: Use pkill
+      exec('pkill -f vips', (error) => {
+        if (error) {
+          console.log('No VIPS processes found or error killing:', error.message);
+        } else {
+          console.log('Successfully terminated VIPS processes');
+        }
+        resolve();
+      });
+    }
+  });
+}
+
+// Helper function to safely delete files with retry logic for locked files
+function deleteFileWithRetry(filePath, maxRetries = 3) {
+  return new Promise(async (resolve, reject) => {
+    let retries = maxRetries;
+    
+    const attemptDelete = async () => {
+      try {
+        if (fs.existsSync(filePath)) {
+          if (fs.lstatSync(filePath).isDirectory()) {
+            fs.rmSync(filePath, { recursive: true, force: true });
+          } else {
+            fs.unlinkSync(filePath);
+          }
+          console.log(`Removed: ${path.basename(filePath)}`);
+        }
+        resolve();
+      } catch (error) {
+        if (retries > 0 && (error.code === 'EBUSY' || error.code === 'EPERM' || error.code === 'ENOTEMPTY')) {
+          retries--;
+          console.log(`File locked, retrying in 3s... (${retries} attempts left): ${path.basename(filePath)}`);
+          
+          // Kill VIPS processes before retrying
+          if (retries === maxRetries - 1) {
+            console.log('Attempting to kill VIPS processes that may be holding file handles...');
+            await killVipsProcesses();
+          }
+          
+          setTimeout(attemptDelete, 3000); // Increased to 3 seconds
+        } else {
+          console.warn(`Failed to delete ${filePath}:`, error.message);
+          reject(error);
+        }
+      }
+    };
+    attemptDelete();
+  });
+}
+
 const VipsConfig = require('./vips-config');
 const SlideMetadataExtractor = require('./slideMetadataExtractor');
 const LabServerClient = require('./services/labServerClient');
@@ -14,6 +162,18 @@ const LabServerClient = require('./services/labServerClient');
 const app = express();
 const PORT = config.port;
 let vipsConfig, labClient, autoProcessor, metadataExtractor;
+
+// Active conversion tracking
+const activeConversions = new Map(); // filename -> { processes: [], progressTimer, startTime, outputName }
+
+// Configure Express for tile serving priority
+app.use((req, res, next) => {
+  // Prioritize tile requests for user viewing experience
+  if (req.url.includes('/dzi/') || req.url.includes('.dzi') || req.url.includes('_files/')) {
+    req.priority = 'high';
+  }
+  next();
+});
 
 if (config.isServerMode()) {
   // Initialize VIPS configuration and metadata extractor for lab server
@@ -64,325 +224,59 @@ if (config.isServerMode()) {
   });
 }
 
-// SVS to DZI conversion function with metadata extraction
+// Redirect legacy function to use worker pool system
 function convertSvsToDzi(svsPath, outputName) {
-  return new Promise(async (resolve, reject) => {
-    const outputPath = path.join(config.dziDir, outputName);
-    const startTime = Date.now();
-    
-    // Get original file stats
-    const originalStats = fs.statSync(svsPath);
-    const originalSize = originalStats.size;
-    
-    // Step 1: Extract metadata (preparation step)
-    let metadata = null;
-    let extractedIccProfile = null;
-    
-    try {
-      console.log(`\n=== PREPARATION STEP: METADATA EXTRACTION ===`);
-      metadata = await metadataExtractor.extractMetadata(svsPath, outputName);
-      extractedIccProfile = metadata.iccProfile;
-      console.log(`Metadata extraction completed`);
-      console.log(`==============================================\n`);
-    } catch (error) {
-      console.warn(`Metadata extraction failed: ${error.message}`);
-      console.log(`Proceeding with conversion without extracted metadata\n`);
+  console.log('Legacy convertSvsToDzi called - redirecting to worker pool system');
+  
+  // Use worker pool system like manual conversions do
+  if (!workerPool) {
+    const WorkerPool = require('./workerPool');
+    workerPool = new WorkerPool(3);
+  }
+
+  const fileInfo = {
+    fileName: path.basename(svsPath),
+    filePath: svsPath,
+    baseName: outputName,
+    retryCount: 0
+  };
+
+  // Create VIPS configuration
+  const VipsConfig = require('./vips-config');
+  const vipsConfig = new VipsConfig();
+  
+  return workerPool.processSlide(
+    fileInfo,
+    {
+      slidesDir: path.dirname(svsPath),
+      dziDir: config.dziDir
+    },
+    {
+      env: {
+        ...process.env,
+        ...vipsConfig.getEnvironmentVars()
+      },
+      concurrency: vipsConfig.optimalThreads
     }
-    
-    // Check for existing tile folder
-    const tilesDir = `${outputPath}_files`;
-    const existingTiles = fs.existsSync(tilesDir);
-    let existingTileCount = 0;
-    
-    // Check for existing tile folder (debug logging removed for production)
-    
-    if (existingTiles) {
-      // Count existing tiles
-      try {
-        const countTiles = (dir) => {
-          let count = 0;
-          const files = fs.readdirSync(dir);
-          files.forEach(file => {
-            const filePath = path.join(dir, file);
-            const stat = fs.statSync(filePath);
-            if (stat.isDirectory()) {
-              count += countTiles(filePath);
-            } else if (file.endsWith('.jpg') || file.endsWith('.jpeg')) {
-              count++;
-            }
-          });
-          return count;
-        };
-        existingTileCount = countTiles(tilesDir);
-      } catch (err) {
-        console.error('Error counting existing tiles:', err);
-      }
-    }
-    
-    // Using optimized VIPS command to convert SVS to DZI
-    const command = vipsConfig.getOptimizedCommand(svsPath, outputPath, {
-      tileSize: 256,
-      overlap: 1,
-      quality: 90,
-      iccProfile: extractedIccProfile,  // Use extracted ICC profile
-      embedIcc: false // transform colors but do not embed ICC in each tile to keep size small
-    });
-    
-    // Set optimized environment variables for VIPS
-    const vipsEnv = { ...process.env, ...vipsConfig.getEnvironmentVars() };
-    
-    console.log(`\n=== CONVERSION STARTED ===`);
-    console.log(`File: ${path.basename(svsPath)}`);
-    console.log(`Original size: ${(originalSize / 1024 / 1024 / 1024).toFixed(2)} GB`);
-    console.log(`Start time: ${new Date(startTime).toLocaleTimeString()}`);
-    if (existingTiles) {
-      console.log(`Existing tile folder detected: ${path.basename(tilesDir)}`);
-      console.log(`Existing tiles found: ${existingTileCount.toLocaleString()}`);
-      console.log(`Mode: Validation/repair of existing tiles`);
+  ).then(result => {
+    if (result.success) {
+      return {
+        success: true,
+        dziPath: `${path.join(config.dziDir, outputName)}.dzi`,
+        duration: result.elapsedMs || 0,
+        metadata: {},
+        stats: {
+          originalSize: 0,
+          convertedSize: 0,
+          fileCount: 0,
+          processingRate: 0,
+          startTime: Date.now(),
+          endTime: Date.now()
+        }
+      };
     } else {
-      console.log(`Mode: Full conversion (no existing tiles)`);
+      throw new Error(result.error || 'Conversion failed');
     }
-    console.log(`Command: ${command}`);
-    console.log(`========================\n`);
-    
-    // Periodic progress broadcaster: count generated tiles while conversion runs
-    let progressTimer = null;
-    const startProgress = () => {
-      try {
-        // Start polling every 3s
-        progressTimer = setInterval(() => {
-          try {
-            let created = 0;
-            if (fs.existsSync(tilesDir)) {
-              const walkCount = (dir) => {
-                let count = 0;
-                const files = fs.readdirSync(dir);
-                for (const f of files) {
-                  const p = path.join(dir, f);
-                  const st = fs.statSync(p);
-                  if (st.isDirectory()) count += walkCount(p);
-                  else if (f.endsWith('.jpg') || f.endsWith('.jpeg')) count++;
-                }
-                return count;
-              };
-              created = walkCount(tilesDir);
-            }
-            const elapsedMs = Date.now() - startTime;
-            broadcastToClients({
-              type: 'conversion_progress',
-              filename: outputName,
-              tilesCreated: created,
-              elapsedMs
-            });
-          } catch (_) { /* noop */ }
-        }, 3000);
-      } catch (_) { /* noop */ }
-    };
-
-    startProgress();
-
-    exec(command, { env: vipsEnv, maxBuffer: 1024 * 1024 * 10 }, (error, stdout, stderr) => {
-      const endTime = Date.now();
-      const duration = endTime - startTime;
-
-      if (error) {
-        if (progressTimer) clearInterval(progressTimer);
-        console.error(`\n=== CONVERSION FAILED ===`);
-        console.error(`Error: ${error}`);
-        console.error(`Duration: ${(duration / 1000).toFixed(1)} seconds`);
-        console.error(`========================\n`);
-        
-        // Try alternative method with Sharp
-        convertWithSharp(svsPath, outputName, startTime, originalSize)
-          .then(resolve)
-          .catch(reject);
-        return;
-      }
-      
-      // Stop progress timer and calculate conversion metrics
-      if (progressTimer) clearInterval(progressTimer);
-      const dziPath = `${outputPath}.dzi`;
-      const tilesDir = `${outputPath}_files`;
-      
-      // Get converted file stats
-      let convertedSize = 0;
-      let fileCount = 0;
-      
-      try {
-        if (fs.existsSync(dziPath)) {
-          convertedSize += fs.statSync(dziPath).size;
-          fileCount++;
-        }
-        
-        if (fs.existsSync(tilesDir)) {
-          const walkDir = (dir) => {
-            const files = fs.readdirSync(dir);
-            files.forEach(file => {
-              const filePath = path.join(dir, file);
-              const stat = fs.statSync(filePath);
-              if (stat.isDirectory()) {
-                walkDir(filePath);
-              } else {
-                convertedSize += stat.size;
-                fileCount++;
-              }
-            });
-          };
-          walkDir(tilesDir);
-        }
-      } catch (err) {
-        console.error('Error calculating converted file size:', err);
-      }
-      
-      // Calculate tile validation metrics
-      let finalTileCount = 0;
-      let tilesCreated = 0;
-      let tilesValidated = 0;
-      
-      try {
-        if (fs.existsSync(tilesDir)) {
-          const countFinalTiles = (dir) => {
-            let count = 0;
-            const files = fs.readdirSync(dir);
-            files.forEach(file => {
-              const filePath = path.join(dir, file);
-              const stat = fs.statSync(filePath);
-              if (stat.isDirectory()) {
-                count += countFinalTiles(filePath);
-              } else if (file.endsWith('.jpg') || file.endsWith('.jpeg')) {
-                count++;
-              }
-            });
-            return count;
-          };
-          finalTileCount = countFinalTiles(tilesDir);
-        }
-        
-        if (existingTiles) {
-          // In validation mode
-          tilesValidated = existingTileCount;
-          tilesCreated = finalTileCount - existingTileCount;
-        } else {
-          // In full conversion mode
-          tilesCreated = finalTileCount;
-        }
-      } catch (err) {
-        console.error('Error calculating tile metrics:', err);
-      }
-
-      console.log(`\n=== CONVERSION COMPLETED ===`);
-      console.log(`File: ${path.basename(svsPath)}`);
-      console.log(`Duration: ${(duration / 1000).toFixed(1)} seconds (${(duration / 60000).toFixed(1)} minutes)`);
-      console.log(`Original size: ${(originalSize / 1024 / 1024 / 1024).toFixed(2)} GB`);
-      console.log(`Converted size: ${(convertedSize / 1024 / 1024 / 1024).toFixed(2)} GB`);
-      console.log(`Size change: ${convertedSize > originalSize ? '+' : ''}${(((convertedSize - originalSize) / originalSize) * 100).toFixed(1)}%`);
-      
-      if (existingTiles) {
-        console.log(`\n--- TILE VALIDATION RESULTS ---`);
-        console.log(`Tiles validated: ${tilesValidated.toLocaleString()}`);
-        console.log(`Tiles created/repaired: ${tilesCreated.toLocaleString()}`);
-        console.log(`Total tiles: ${finalTileCount.toLocaleString()}`);
-        console.log(`Validation rate: ${(tilesValidated / (duration / 1000)).toFixed(0)} tiles/second`);
-        if (tilesCreated > 0) {
-          console.log(`Missing/corrupted tiles found: ${tilesCreated.toLocaleString()}`);
-          console.log(`Repair completion: ${((tilesValidated / finalTileCount) * 100).toFixed(1)}% validated, ${((tilesCreated / finalTileCount) * 100).toFixed(1)}% repaired`);
-        } else {
-          console.log(`All existing tiles validated successfully - no repairs needed`);
-        }
-        console.log(`------------------------------`);
-      } else {
-        console.log(`Total tiles created: ${finalTileCount.toLocaleString()}`);
-      }
-      
-      console.log(`Processing rate: ${(originalSize / 1024 / 1024 / (duration / 1000)).toFixed(1)} MB/second`);
-      console.log(`VIPS threads used: ${vipsEnv.VIPS_CONCURRENCY}`);
-      console.log(`VIPS memory limit: ${Math.floor(parseInt(vipsEnv.VIPS_CACHE_MAX_MEMORY) / (1024 * 1024))} MB`);
-      if (vipsEnv.VIPS_BUFFER_SIZE) {
-        console.log(`VIPS buffer size: ${Math.floor(parseInt(vipsEnv.VIPS_BUFFER_SIZE) / (1024 * 1024))} MB`);
-      }
-      if (vipsEnv.VIPS_TMPDIR) {
-        console.log(`VIPS temp dir: ${vipsEnv.VIPS_TMPDIR}`);
-      }
-      console.log(`End time: ${new Date(endTime).toLocaleTimeString()}`);
-      console.log(`============================\n`);
-
-      // Final progress broadcast with completion flag
-      try {
-        broadcastToClients({
-          type: 'conversion_progress',
-          filename: outputName,
-          tilesCreated: finalTileCount,
-          elapsedMs: duration,
-          done: true
-        });
-      } catch (_) { /* noop */ }
-      
-      resolve({
-        dziPath,
-        metrics: {
-          duration,
-          originalSize,
-          convertedSize,
-          fileCount,
-          processingRate: originalSize / 1024 / 1024 / (duration / 1000),
-          startTime,
-          endTime
-        }
-      });
-    });
-  });
-}
-
-// Alternative conversion using Sharp (fallback)
-function convertWithSharp(svsPath, outputName, startTime, originalSize) {
-  return new Promise((resolve, reject) => {
-    const sharp = require('sharp');
-    const outputPath = path.join(config.dziDir, outputName);
-    const dziPath = `${outputPath}.dzi`;
-    
-    console.log(`\n=== SHARP FALLBACK CONVERSION ===`);
-    console.log(`Attempting Sharp conversion for ${path.basename(svsPath)}...`);
-    console.log(`Note: Sharp has limited SVS support`);
-    console.log(`================================\n`);
-    
-    // Sharp tile generation
-    sharp(svsPath)
-      .tile({
-        size: 256,
-        overlap: 1,
-        layout: 'dz'
-      })
-      .toFile(outputPath)
-      .then(() => {
-        const endTime = Date.now();
-        const duration = endTime - startTime;
-        
-        console.log(`\n=== SHARP CONVERSION COMPLETED ===`);
-        console.log(`File: ${path.basename(svsPath)}`);
-        console.log(`Duration: ${(duration / 1000).toFixed(1)} seconds`);
-        console.log(`Method: Sharp fallback`);
-        console.log(`=================================\n`);
-        
-        resolve({
-          dziPath,
-          metrics: {
-            duration,
-            originalSize,
-            convertedSize: 0, // Sharp doesn't provide easy size calculation
-            fileCount: 0,
-            processingRate: originalSize / 1024 / 1024 / (duration / 1000),
-            startTime,
-            endTime: endTime,
-            method: 'sharp'
-          }
-        });
-      })
-      .catch(error => {
-        console.error(`\n=== SHARP CONVERSION FAILED ===`);
-        console.error(`Error: ${error.message}`);
-        console.error(`===============================\n`);
-        reject(error);
-      });
   });
 }
 
@@ -404,41 +298,71 @@ app.get('/api/slides', async (req, res) => {
   // Server mode - original logic
   const slideFiles = [];
   
-  // Check original slides directory
-  if (fs.existsSync(config.slidesDir)) {
-    const originalFiles = fs.readdirSync(config.slidesDir);
+  // Recursively scan slides directory and all subfolders
+  function scanSlidesRecursively(dir, relativePath = '') {
+    if (!fs.existsSync(dir)) return;
+    
+    const items = fs.readdirSync(dir, { withFileTypes: true });
     const supportedFormats = ['.svs', '.ndpi', '.tif', '.tiff', '.jp2', '.vms', '.vmu', '.scn'];
     
-    originalFiles
-      .filter(file => {
-        const ext = path.extname(file).toLowerCase();
-        return supportedFormats.includes(ext);
-      })
-      .forEach(file => {
-        const baseName = path.basename(file, path.extname(file));
-        const dziPath = path.join(config.dziDir, `${baseName}.dzi`);
-        const hasDzi = fs.existsSync(dziPath);
-        // Metadata-derived assets
-        const metadataDir = path.join(config.dziDir, 'metadata');
-        const labelFs = path.join(metadataDir, `${baseName}_label.jpg`);
-        const macroFs = path.join(metadataDir, `${baseName}_macro.jpg`);
-        const labelUrl = fs.existsSync(labelFs) ? `/dzi/metadata/${baseName}_label.jpg` : null;
-        const macroUrl = fs.existsSync(macroFs) ? `/dzi/metadata/${baseName}_macro.jpg` : null;
-        const thumbnailUrl = macroUrl || labelUrl || null;
-        
-        slideFiles.push({
-          name: baseName,
-          originalFile: `/slides/${file}`,
-          dziFile: hasDzi ? `/dzi/${baseName}.dzi` : null,
-          format: path.extname(file).toLowerCase(),
-          converted: hasDzi,
-          size: fs.statSync(path.join(config.slidesDir, file)).size,
-          labelUrl,
-          macroUrl,
-          thumbnailUrl
-        });
-      });
+    items.forEach(item => {
+      const fullPath = path.join(dir, item.name);
+      const relativeFilePath = path.join(relativePath, item.name);
+      
+      if (item.isDirectory()) {
+        // Recursively scan subdirectories
+        scanSlidesRecursively(fullPath, relativeFilePath);
+      } else if (item.isFile()) {
+        const ext = path.extname(item.name).toLowerCase();
+        if (supportedFormats.includes(ext)) {
+          const baseName = path.basename(item.name, ext);
+          const uniqueName = relativePath ? `${relativePath.replace(/[\\\/]/g, '_')}_${baseName}` : baseName;
+          const dziPath = path.join(config.dziDir, `${uniqueName}.dzi`);
+          const hasDzi = fs.existsSync(dziPath);
+          
+          // Metadata-derived assets
+          const metadataDir = path.join(config.dziDir, 'metadata');
+          const labelFs = path.join(metadataDir, `${uniqueName}_label.jpg`);
+          const macroFs = path.join(metadataDir, `${uniqueName}_macro.jpg`);
+          const metadataJsonPath = path.join(metadataDir, `${uniqueName}_metadata.json`);
+          const labelUrl = fs.existsSync(labelFs) ? `/dzi/metadata/${uniqueName}_label.jpg` : null;
+          const macroUrl = fs.existsSync(macroFs) ? `/dzi/metadata/${uniqueName}_macro.jpg` : null;
+          const thumbnailUrl = macroUrl || labelUrl || null;
+          
+          // Read metadata JSON if it exists
+          let metadata = null;
+          let slideLabel = null;
+          if (fs.existsSync(metadataJsonPath)) {
+            try {
+              const metadataContent = fs.readFileSync(metadataJsonPath, 'utf8');
+              metadata = JSON.parse(metadataContent);
+              slideLabel = metadata.label || metadata.description || metadata.title || null;
+            } catch (error) {
+              console.warn(`Failed to read metadata for ${uniqueName}:`, error.message);
+            }
+          }
+          
+          slideFiles.push({
+            name: uniqueName,
+            originalName: baseName,
+            folder: relativePath || 'root',
+            originalFile: `/slides/${relativeFilePath.replace(/\\/g, '/')}`,
+            dziFile: hasDzi ? `/dzi/${uniqueName}.dzi` : null,
+            format: ext,
+            converted: hasDzi,
+            size: fs.statSync(fullPath).size,
+            labelUrl,
+            macroUrl,
+            thumbnailUrl,
+            label: slideLabel,
+            metadata
+          });
+        }
+      }
+    });
   }
+  
+  scanSlidesRecursively(config.slidesDir);
   
   // Check for standalone DZI files
   if (fs.existsSync(config.dziDir)) {
@@ -475,8 +399,8 @@ app.get('/api/slides', async (req, res) => {
 });
 
 // Serve slide files directly
-app.get('/slides/:filename', async (req, res) => {
-  const filename = req.params.filename;
+app.get('/slides/*', async (req, res) => {
+  const filename = req.params[0]; // Use wildcard to capture full path including subfolders
   
   if (config.isClientMode()) {
     // Proxy request to lab server
@@ -489,7 +413,7 @@ app.get('/slides/:filename', async (req, res) => {
     return;
   }
 
-  // Server mode - original logic
+  // Server mode - handle subfolder paths
   const filePath = path.join(config.slidesDir, filename);
   
   if (!fs.existsSync(filePath)) {
@@ -537,7 +461,23 @@ if (config.isServerMode()) {
     res.header('Access-Control-Allow-Headers', 'Content-Type, Range');
     return req.method === 'OPTIONS' ? res.sendStatus(204) : next();
   };
-  app.use('/dzi', dziHeaders, dziCors, express.static(config.dziDir));
+
+  // Serve static files with optimized settings for tile serving priority
+  const staticOptions = {
+    maxAge: '1d', // Cache tiles for better performance
+    etag: true,
+    lastModified: true,
+    setHeaders: (res, path) => {
+      // Prioritize tile serving responses
+      if (path.includes('_files/') || path.endsWith('.dzi')) {
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.setHeader('X-Priority', 'high');
+      }
+    }
+  };
+
+  app.use('/dzi', dziHeaders, dziCors, express.static(config.dziDir, staticOptions));
+  app.use('/slides', express.static(config.slidesDir, staticOptions));
   // Explicit preflight
   app.options('/dzi/*', dziCors, (req, res) => res.sendStatus(204));
 } else {
@@ -552,6 +492,176 @@ if (config.isServerMode()) {
     }
   });
 }
+
+// API endpoint to cancel conversion
+app.post('/api/convert/:filename/cancel', async (req, res) => {
+  const filename = req.params.filename;
+  const baseName = path.basename(filename, path.extname(filename));
+  
+  if (config.isClientMode()) {
+    // Proxy cancel request to lab server
+    try {
+      const result = await labClient.cancelConversion(baseName);
+      res.json(result);
+    } catch (error) {
+      res.status(503).json({ error: 'Lab server unavailable', details: error.message });
+    }
+    return;
+  }
+
+  // Server mode - cancel conversion
+  const conversion = activeConversions.get(baseName);
+  if (!conversion) {
+    return res.status(404).json({ error: 'No active conversion found for this file' });
+  }
+
+  try {
+    console.log(`Cancelling conversion of ${filename}...`);
+    
+    // Kill all active processes more aggressively on Windows
+    const killPromises = conversion.processes.map(proc => {
+      return new Promise((resolve) => {
+        if (!proc || proc.killed) {
+          resolve();
+          return;
+        }
+        
+        console.log(`Killing process PID ${proc.pid} with SIGTERM`);
+        
+        // On Windows, use taskkill for more reliable process termination
+        if (process.platform === 'win32') {
+          try {
+            // Kill the process tree to ensure all child processes are terminated
+            exec(`taskkill /F /T /PID ${proc.pid}`, (error) => {
+              if (error) {
+                console.log(`taskkill failed for PID ${proc.pid}, trying Node.js kill`);
+                try {
+                  proc.kill('SIGKILL');
+                } catch (killError) {
+                  console.log(`Node.js kill also failed for PID ${proc.pid}:`, killError.message);
+                }
+              } else {
+                console.log(`Successfully killed process tree for PID ${proc.pid}`);
+              }
+              resolve();
+            });
+          } catch (error) {
+            console.log(`taskkill command failed, falling back to Node.js kill:`, error.message);
+            proc.kill('SIGTERM');
+            resolve();
+          }
+        } else {
+          // Unix-like systems
+          proc.kill('SIGTERM');
+          
+          // Force kill after 2 seconds if still running
+          setTimeout(() => {
+            if (proc && !proc.killed) {
+              console.log(`Force killing process PID ${proc.pid} with SIGKILL`);
+              proc.kill('SIGKILL');
+            }
+            resolve();
+          }, 2000);
+        }
+      });
+    });
+    
+    // Wait for all processes to be killed before proceeding
+    await Promise.all(killPromises);
+    
+    // Clear progress timer
+    if (conversion.progressTimer) {
+      clearInterval(conversion.progressTimer);
+    }
+    
+    // Wait a moment for processes to fully terminate before cleanup
+    setTimeout(async () => {
+      console.log(`Cleaning up partial files for ${baseName}...`);
+      
+      // Clean up partial files immediately and thoroughly
+      const outputPath = path.join(config.dziDir, `${baseName}.dzi`);
+      const tilesDir = path.join(config.dziDir, `${baseName}_files`);
+      const tempFiles = [
+        outputPath,
+        tilesDir,
+        path.join(__dirname, `temp_srgb_${conversion.startTime}.v`),
+        path.join(__dirname, `temp_stream_${conversion.startTime}.v`)
+      ];
+      
+      // Delete partial files with retry logic for Windows file locking
+      const deletePromises = tempFiles.map(filePath => 
+        deleteFileWithRetry(filePath, 5).catch(error => 
+          console.warn(`Failed to delete ${filePath}:`, error.message)
+        )
+      );
+      await Promise.all(deletePromises);
+      
+      // Also clean up any other temp files that might be related
+      try {
+        const tempPattern = new RegExp(`temp_.*_${conversion.startTime}\\.v$`);
+        const files = fs.readdirSync(__dirname);
+        for (const file of files) {
+          if (tempPattern.test(file)) {
+            const tempPath = path.join(__dirname, file);
+            try {
+              fs.unlinkSync(tempPath);
+              console.log(`Cleaned up temp file: ${file}`);
+            } catch (error) {
+              console.warn(`Failed to clean up temp file ${file}:`, error.message);
+            }
+          }
+        }
+      } catch (error) {
+        console.warn(`Failed to clean up additional temp files:`, error.message);
+      }
+    }, 3000); // Wait 3 seconds for processes to fully terminate
+    
+    // Remove from tracking immediately to stop progress updates
+    activeConversions.delete(baseName);
+    
+    // Stop any ongoing progress monitoring
+    console.log(`Stopping progress monitoring for ${baseName}`);
+    
+    // Mark file as cancelled to prevent autoprocessor from re-processing
+    const originalFile = path.join(config.slidesDir, `${baseName}.svs`);
+    const cancelledFlagFile = path.join(config.slidesDir, `.${actualBaseName}.cancelled`);
+    
+    try {
+      fs.writeFileSync(cancelledFlagFile, JSON.stringify({
+        cancelledAt: new Date().toISOString(),
+        originalFile: originalFile,
+        reason: 'User cancelled conversion'
+      }));
+      console.log(`Created cancellation flag: ${cancelledFlagFile}`);
+    } catch (error) {
+      console.warn(`Failed to create cancellation flag: ${error.message}`);
+    }
+    
+    // Notify clients immediately
+    broadcastToClients({
+      type: 'conversion_cancelled',
+      filename: baseName
+    });
+    
+    res.json({ message: 'Conversion cancelled successfully', filename: baseName });
+    
+  } catch (error) {
+    console.error(`Failed to cancel conversion: ${error}`);
+    res.status(500).json({ error: 'Failed to cancel conversion', details: error.message });
+  }
+});
+
+// API endpoint to kill hanging VIPS processes
+app.post('/api/kill-vips-processes', async (req, res) => {
+  try {
+    console.log('Manual VIPS process termination requested');
+    await killVipsProcesses();
+    res.json({ message: 'VIPS processes terminated successfully' });
+  } catch (error) {
+    console.error('Error killing VIPS processes:', error);
+    res.status(500).json({ error: 'Failed to kill VIPS processes', details: error.message });
+  }
+});
 
 // API endpoint to delete a slide
 app.delete('/api/slides/:filename', async (req, res) => {
@@ -570,17 +680,85 @@ app.delete('/api/slides/:filename', async (req, res) => {
 
   // Server mode - delete slide and associated files
   try {
-    const baseName = path.basename(filename, path.extname(filename));
-    const slidePath = path.join(config.slidesDir, filename);
-    const dziPath = path.join(config.dziDir, `${baseName}.dzi`);
-    const tilesDir = path.join(config.dziDir, `${baseName}_files`);
+    // Find the actual slide file by searching through the slides directory
+    let actualSlidePath = null;
+    let actualBaseName = null;
+    let actualRelativePath = null;
+    
+    // Search recursively for the file that matches this unique name
+    function findSlideFile(dir, relativePath = '') {
+      if (!fs.existsSync(dir)) return false;
+      
+      const items = fs.readdirSync(dir, { withFileTypes: true });
+      const supportedFormats = ['.svs', '.ndpi', '.tif', '.tiff', '.jp2', '.vms', '.vmu', '.scn'];
+      
+      for (const item of items) {
+        const fullPath = path.join(dir, item.name);
+        const relativeFilePath = path.join(relativePath, item.name);
+        
+        if (item.isDirectory()) {
+          // Recursively search subdirectories
+          if (findSlideFile(fullPath, relativeFilePath)) {
+            return true; // Found in subdirectory
+          }
+        } else if (item.isFile()) {
+          const ext = path.extname(item.name).toLowerCase();
+          if (supportedFormats.includes(ext)) {
+            const baseName = path.basename(item.name, ext);
+            const uniqueName = relativePath ? `${relativePath.replace(/[\\\/]/g, '_')}_${baseName}` : baseName;
+            
+            console.log(`Checking file: ${relativeFilePath}, uniqueName: ${uniqueName}, looking for: ${filename}`);
+            
+            if (uniqueName === filename) {
+              actualSlidePath = fullPath;
+              actualBaseName = uniqueName;
+              actualRelativePath = relativeFilePath;
+              console.log(`Found matching slide: ${actualSlidePath}`);
+              return true;
+            }
+          }
+        }
+      }
+      return false;
+    }
+    
+    findSlideFile(config.slidesDir);
+    
+    // If original slide file not found, use the filename directly as the base name
+    // This allows deletion of DZI/metadata files even when original slide is missing
+    if (!actualSlidePath) {
+      actualBaseName = filename; // Use the provided filename as the base name
+      console.log(`Original slide file not found for ${filename}, proceeding with DZI/metadata cleanup only`);
+    }
+    
+    // Define file paths
+    const dziPath = path.join(config.dziDir, `${actualBaseName}.dzi`);
+    const tilesDir = path.join(config.dziDir, `${actualBaseName}_files`);
+    
+    // Metadata files
+    const metadataDir = path.join(config.dziDir, 'metadata');
+    const labelPath = path.join(metadataDir, `${actualBaseName}_label.jpg`);
+    const macroPath = path.join(metadataDir, `${actualBaseName}_macro.jpg`);
+    const metadataJsonPath = path.join(metadataDir, `${actualBaseName}_metadata.json`);
     
     let deletedFiles = [];
     
-    // Delete original slide file
-    if (fs.existsSync(slidePath)) {
-      fs.unlinkSync(slidePath);
-      deletedFiles.push('original');
+    // Delete original slide file with retry logic for locked files (only if it exists)
+    if (actualSlidePath && fs.existsSync(actualSlidePath)) {
+      try {
+        await deleteFileWithRetry(actualSlidePath, 5); // 5 retries with 3 second delays
+        deletedFiles.push('original');
+      } catch (error) {
+        // If deletion fails, offer manual process termination
+        console.error(`Failed to delete ${actualSlidePath} after retries:`, error.message);
+        res.status(423).json({ 
+          error: 'File is locked by running processes', 
+          details: error.message,
+          suggestion: 'Try using the "Kill VIPS Processes" button and then delete again',
+          filename: filename
+        });
+        return;
+      }
     }
     
     // Delete DZI file
@@ -589,24 +767,104 @@ app.delete('/api/slides/:filename', async (req, res) => {
       deletedFiles.push('dzi');
     }
     
-    // Delete tiles directory
+    // Delete metadata files
+    if (fs.existsSync(labelPath)) {
+      fs.unlinkSync(labelPath);
+      deletedFiles.push('label');
+    }
+    
+    if (fs.existsSync(macroPath)) {
+      fs.unlinkSync(macroPath);
+      deletedFiles.push('macro');
+    }
+    
+    if (fs.existsSync(metadataJsonPath)) {
+      fs.unlinkSync(metadataJsonPath);
+      deletedFiles.push('metadata');
+    }
+    
+    // Delete cancellation flag if it exists
+    const cancelledFlagFile = path.join(config.slidesDir, `.${actualBaseName}.cancelled`);
+    if (fs.existsSync(cancelledFlagFile)) {
+      fs.unlinkSync(cancelledFlagFile);
+      deletedFiles.push('cancellation-flag');
+      console.log(`Deleted cancellation flag: ${cancelledFlagFile}`);
+    }
+    
+    // Delete tiles directory (fully asynchronous to prevent blocking)
     if (fs.existsSync(tilesDir)) {
-      fs.rmSync(tilesDir, { recursive: true, force: true });
-      deletedFiles.push('tiles');
+      // Immediately rename tiles directory to mark for deletion (this is fast)
+      const tempDeleteDir = path.join(config.dziDir, `__delete_${actualBaseName}_${Date.now()}`);
+      try {
+        fs.renameSync(tilesDir, tempDeleteDir);
+        deletedFiles.push('tiles');
+
+        // Directory renamed for deletion - actual cleanup handled by periodic process
+        console.log(`Marked for deletion: ${tempDeleteDir}`);
+
+      } catch (renameError) {
+        // Fallback to original method if initial rename fails
+        console.warn(`Fast deletion failed, falling back to standard method:`, renameError);
+        setImmediate(() => {
+          fs.rmSync(tilesDir, { recursive: true, force: true });
+        });
+        deletedFiles.push('tiles');
+      }
     }
     
     console.log(`Deleted slide: ${filename} (${deletedFiles.join(', ')})`);
     
+    // Check if we actually deleted anything
+    if (deletedFiles.length === 0) {
+      return res.status(404).json({ 
+        error: 'No files found to delete',
+        message: `No DZI, metadata, or original files found for ${filename}`
+      });
+    }
+
+    // Clear from auto-processor tracking if it exists
+    if (autoProcessor && typeof autoProcessor.clearProcessedFile === 'function') {
+      autoProcessor.clearProcessedFile(actualSlidePath || actualBaseName);
+    }
+    
+    // Clear from conversion server tracking
+    try {
+      // Cancel any active conversion for this slide
+      if (activeConversions && activeConversions.has(actualBaseName)) {
+        activeConversions.delete(actualBaseName);
+      }
+      
+      // Clear from conversion server completed tracking
+      const conversionServerUrl = config.conversionServerUrl || 'http://localhost:3001';
+      console.log(`Clearing conversion server tracking for: ${actualBaseName}`);
+      try {
+        const response = await fetch(`${conversionServerUrl}/clear/${encodeURIComponent(actualBaseName)}`, { 
+          method: 'DELETE',
+          timeout: 3000 
+        });
+        if (response.ok) {
+          console.log(`✅ Cleared conversion server tracking for: ${actualBaseName}`);
+        } else {
+          console.warn(`⚠️ Failed to clear conversion server tracking: ${response.status}`);
+        }
+      } catch (fetchError) {
+        console.warn(`⚠️ Conversion server unavailable for clearing: ${fetchError.message}`);
+      }
+    } catch (error) {
+      console.warn('Failed to clear conversion server tracking:', error.message);
+    }
+
     // Broadcast deletion to WebSocket clients
     broadcastToClients({
       type: 'slide_deleted',
-      filename: baseName,
+      filename: actualBaseName,
       deletedComponents: deletedFiles
     });
     
     res.json({ 
+      success: true,
       message: 'Slide deleted successfully', 
-      filename: baseName,
+      filename: actualBaseName,
       deletedComponents: deletedFiles 
     });
     
@@ -615,6 +873,252 @@ app.delete('/api/slides/:filename', async (req, res) => {
     res.status(500).json({ error: 'Failed to delete slide', details: error.message });
   }
 });
+
+// Common conversion function used by both manual and auto conversions
+async function startConversion(filename, isAutoConversion = false) {
+  const svsPath = path.join(config.slidesDir, filename);
+  
+  if (!fs.existsSync(svsPath)) {
+    throw new Error('Slide file not found');
+  }
+  
+  const baseName = path.basename(filename, path.extname(filename));
+  
+  // Check if conversion is already running for this file
+  if (activeConversions.has(baseName)) {
+    throw new Error('Conversion already in progress for this file');
+  }
+  
+  console.log(`Starting ${isAutoConversion ? 'auto-' : 'manual '}conversion of ${filename}...`);
+  
+  // Notify clients that conversion started
+  broadcastToClients({
+    type: isAutoConversion ? 'auto_processing_started' : 'conversion_started',
+    filename: baseName
+  });
+  
+  // Use optimized auto-processor for both manual and auto conversions
+  if (autoProcessor && autoProcessor.conversionClient) {
+    try {
+      // Track conversion
+      activeConversions.set(baseName, {
+        processes: [],
+        progressTimer: null,
+        startTime: Date.now(),
+        outputName: baseName
+      });
+
+      // Start conversion using optimized conversion server
+      const result = await autoProcessor.conversionClient.startConversion(
+        svsPath,
+        baseName,
+        config.slidesDir,
+        config.dziDir
+      );
+      
+      console.log(`Optimized conversion queued: ${baseName} (position: ${result.queuePosition})`);
+      
+      // Set up progress polling for manual conversions
+      if (!isAutoConversion) {
+        // Create a temporary event listener for this specific manual conversion
+        const manualProgressHandler = (data) => {
+          if (data.fileName === baseName || data.filename === baseName || data.baseName === baseName) {
+            console.log(`Manual conversion progress: ${baseName} - ${data.phase} ${data.percent}%`);
+            broadcastToClients({
+              type: 'conversion_progress',
+              filename: baseName,
+              fileName: baseName,
+              baseName: baseName,
+              phase: data.phase,
+              percent: data.percent,
+              isAutoConversion: false
+            });
+          }
+        };
+        
+        const manualCompleteHandler = (data) => {
+          if (data.fileName === baseName || data.filename === baseName || data.baseName === baseName) {
+            console.log(`Manual conversion completed: ${baseName}`);
+            broadcastToClients({
+              type: 'conversion_complete',
+              filename: baseName,
+              fileName: baseName,
+              baseName: baseName,
+              success: data.success
+            });
+            // Clean up event listeners
+            autoProcessor.conversionClient.removeListener('conversionProgress', manualProgressHandler);
+            autoProcessor.conversionClient.removeListener('conversionCompleted', manualCompleteHandler);
+            autoProcessor.conversionClient.removeListener('conversionError', manualErrorHandler);
+            activeConversions.delete(baseName);
+          }
+        };
+        
+        const manualErrorHandler = (data) => {
+          if (data.fileName === baseName || data.filename === baseName || data.baseName === baseName) {
+            console.log(`Manual conversion error: ${baseName} - ${data.error}`);
+            broadcastToClients({
+              type: 'conversion_error',
+              filename: baseName,
+              fileName: baseName,
+              baseName: baseName,
+              error: data.error
+            });
+            // Clean up event listeners
+            autoProcessor.conversionClient.removeListener('conversionProgress', manualProgressHandler);
+            autoProcessor.conversionClient.removeListener('conversionCompleted', manualCompleteHandler);
+            autoProcessor.conversionClient.removeListener('conversionError', manualErrorHandler);
+            activeConversions.delete(baseName);
+          }
+        };
+        
+        // Add event listeners for this manual conversion
+        autoProcessor.conversionClient.on('conversionProgress', manualProgressHandler);
+        autoProcessor.conversionClient.on('conversionCompleted', manualCompleteHandler);
+        autoProcessor.conversionClient.on('conversionError', manualErrorHandler);
+        
+        autoProcessor.conversionClient.startProgressPolling(baseName);
+      }
+      
+      return { 
+        message: 'Conversion started', 
+        status: result.queuePosition > 1 ? 'queued' : 'processing', 
+        queuePosition: result.queuePosition,
+        baseName: baseName
+      };
+      
+    } catch (error) {
+      activeConversions.delete(baseName);
+      throw error;
+    }
+  }
+  
+  // Fallback to old worker pool system if optimized processor not available
+  if (!workerPool) {
+    const WorkerPool = require('./workerPool');
+    workerPool = new WorkerPool(3);
+    
+    // Set up worker pool event forwarding for manual conversions
+    workerPool.on('conversionStarted', (data) => {
+      console.log(`Manual conversion started: ${data.fileName}`);
+      broadcastToClients({
+        type: 'conversion_started',
+        filename: data.baseName || data.fileName
+      });
+    });
+    
+    workerPool.on('conversionProgress', (data) => {
+      console.log(`Manual conversion progress: ${data.fileName} - ${data.phase} ${data.percent}%`);
+      broadcastToClients({
+        type: 'conversion_progress',
+        filename: data.baseName || data.fileName,
+        phase: data.phase,
+        percent: data.percent,
+        vipsPercent: data.percent,
+        elapsedMs: data.elapsedMs
+      });
+    });
+    
+    workerPool.on('conversionCompleted', (data) => {
+      console.log(`Manual conversion completed: ${data.fileName}`);
+      broadcastToClients({
+        type: 'conversion_complete',
+        filename: data.baseName || data.fileName,
+        dziPath: `/dzi/${data.baseName || data.fileName}.dzi`
+      });
+    });
+    
+    workerPool.on('conversionError', (data) => {
+      console.log(`Manual conversion error: ${data.fileName} - ${data.error}`);
+      broadcastToClients({
+        type: 'conversion_error',
+        filename: data.baseName || data.fileName,
+        error: data.error
+      });
+    });
+  }
+
+  // Track conversion
+  activeConversions.set(baseName, {
+    processes: [],
+    progressTimer: null,
+    startTime: Date.now(),
+    outputName: baseName
+  });
+
+  const fileInfo = {
+    fileName: filename,
+    filePath: svsPath,
+    baseName: baseName,
+    retryCount: 0
+  };
+
+  // Create VIPS configuration
+  const VipsConfig = require('./vips-config');
+  const vipsConfig = new VipsConfig();
+  
+  workerPool.processSlide(
+    fileInfo,
+    {
+      slidesDir: config.slidesDir,
+      dziDir: config.dziDir
+    },
+    {
+      env: {
+        ...process.env,
+        ...vipsConfig.getEnvironmentVars()
+      },
+      concurrency: vipsConfig.optimalThreads
+    }
+  ).then(async (result) => {
+    console.log(`Conversion completed: ${result.success ? 'SUCCESS' : 'FAILED'}`);
+    // Clean up tracking
+    activeConversions.delete(baseName);
+    
+    if (result.success) {
+      // Check if auto-delete is enabled and delete original file
+      if (config.autoDeleteOriginal) {
+        try {
+          const originalPath = path.join(config.slidesDir, filename);
+          if (fs.existsSync(originalPath)) {
+            await deleteFileWithRetry(originalPath, 3);
+            console.log(`Auto-deleted original file: ${filename}`);
+            broadcastToClients({
+              type: 'conversion_auto_delete',
+              filename: baseName,
+              originalFile: filename
+            });
+          }
+        } catch (error) {
+          console.warn(`Failed to auto-delete original file ${filename}:`, error.message);
+        }
+      }
+      
+      // Notify connected WebSocket clients
+      broadcastToClients({
+        type: 'conversion_complete',
+        filename: baseName,
+        dziPath: `/dzi/${baseName}.dzi`
+      });
+    } else {
+      broadcastToClients({
+        type: 'conversion_error',
+        filename: baseName,
+        error: result.error || 'Conversion failed'
+      });
+    }
+  }).catch(error => {
+    console.error(`Conversion failed for ${filename}:`, error);
+    activeConversions.delete(baseName);
+    broadcastToClients({
+      type: 'conversion_error',
+      filename: baseName,
+      error: error.message
+    });
+  });
+    
+  return { message: 'Conversion started', status: 'processing' };
+}
 
 // API endpoint to convert SVS to DZI
 app.post('/api/convert/:filename', async (req, res) => {
@@ -631,50 +1135,235 @@ app.post('/api/convert/:filename', async (req, res) => {
     return;
   }
 
-  // Server mode - original logic
-  const svsPath = path.join(config.slidesDir, filename);
-  
-  if (!fs.existsSync(svsPath)) {
-    return res.status(404).json({ error: 'Slide file not found' });
-  }
-  
-  const baseName = path.basename(filename, path.extname(filename));
-  
   try {
-    console.log(`Starting conversion of ${filename}...`);
-    res.json({ message: 'Conversion started', status: 'processing' });
-    
-    // Start conversion in background
-    convertSvsToDzi(svsPath, baseName)
-      .then(dziPath => {
-        console.log(`Conversion completed: ${dziPath}`);
-        // Notify connected WebSocket clients
-        wss.clients.forEach(client => {
-          if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify({
-              type: 'conversion_complete',
-              filename: baseName,
-              dziPath: `/dzi/${baseName}.dzi`
-            }));
-          }
-        });
-      })
-      .catch(error => {
-        console.error(`Conversion failed: ${error}`);
-        wss.clients.forEach(client => {
-          if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify({
-              type: 'conversion_error',
-              filename: baseName,
-              error: error.message
-            }));
-          }
-        });
-      });
-      
+    const result = await startConversion(filename, false);
+    res.json(result);
   } catch (error) {
     console.error('Conversion error:', error);
     res.status(500).json({ error: 'Conversion failed', details: error.message });
+  }
+});
+
+// API endpoint to rename a slide
+app.put('/api/slides/:filename/rename', async (req, res) => {
+  const filename = req.params.filename;
+  const { newName } = req.body;
+  
+  if (!newName || !newName.trim()) {
+    return res.status(400).json({ error: 'New name is required' });
+  }
+  
+  if (config.isClientMode()) {
+    // Proxy rename request to lab server
+    try {
+      const result = await labClient.renameSlide(filename, newName.trim());
+      res.json(result);
+    } catch (error) {
+      res.status(503).json({ error: 'Lab server unavailable', details: error.message });
+    }
+    return;
+  }
+
+  // Server mode - rename slide and associated files
+  try {
+    // Find the actual slide file by searching through the slides directory
+    let actualSlidePath = null;
+    let actualBaseName = null;
+    let actualRelativePath = null;
+    
+    // Search recursively for the file that matches this unique name
+    function findSlideFile(dir, relativePath = '') {
+      if (!fs.existsSync(dir)) return false;
+      
+      const items = fs.readdirSync(dir, { withFileTypes: true });
+      const supportedFormats = ['.svs', '.ndpi', '.tif', '.tiff', '.jp2', '.vms', '.vmu', '.scn'];
+      
+      for (const item of items) {
+        const fullPath = path.join(dir, item.name);
+        const relativeFilePath = path.join(relativePath, item.name);
+        
+        if (item.isDirectory()) {
+          if (findSlideFile(fullPath, relativeFilePath)) {
+            return true;
+          }
+        } else if (item.isFile()) {
+          const ext = path.extname(item.name).toLowerCase();
+          if (supportedFormats.includes(ext)) {
+            const baseName = path.basename(item.name, ext);
+            const uniqueName = relativePath ? `${relativePath.replace(/[\\\/]/g, '_')}_${baseName}` : baseName;
+            
+            if (uniqueName === filename) {
+              actualSlidePath = fullPath;
+              actualBaseName = uniqueName;
+              actualRelativePath = relativeFilePath;
+              return true;
+            }
+          }
+        }
+      }
+      return false;
+    }
+    
+    findSlideFile(config.slidesDir);
+    
+    if (!actualSlidePath) {
+      return res.status(404).json({ error: 'Slide file not found' });
+    }
+    
+    // Generate new unique name
+    const slideDir = path.dirname(actualSlidePath);
+    const originalExt = path.extname(actualSlidePath);
+    const newFileName = `${newName.trim()}${originalExt}`;
+    const newSlidePath = path.join(slideDir, newFileName);
+    
+    // Check if new name already exists
+    if (fs.existsSync(newSlidePath)) {
+      return res.status(409).json({ error: 'A slide with this name already exists' });
+    }
+    
+    // Calculate new unique name for DZI files
+    const relativeDirPath = path.relative(config.slidesDir, slideDir);
+    const newBaseName = path.basename(newFileName, originalExt);
+    const newUniqueName = relativeDirPath ? `${relativeDirPath.replace(/[\\\/]/g, '_')}_${newBaseName}` : newBaseName;
+    
+    // Rename original slide file
+    fs.renameSync(actualSlidePath, newSlidePath);
+    
+    // Rename associated DZI files if they exist
+    const oldDziPath = path.join(config.dziDir, `${actualBaseName}.dzi`);
+    const oldTilesDir = path.join(config.dziDir, `${actualBaseName}_files`);
+    const newDziPath = path.join(config.dziDir, `${newUniqueName}.dzi`);
+    const newTilesDir = path.join(config.dziDir, `${newUniqueName}_files`);
+    
+    if (fs.existsSync(oldDziPath)) {
+      fs.renameSync(oldDziPath, newDziPath);
+    }
+    
+    if (fs.existsSync(oldTilesDir)) {
+      fs.renameSync(oldTilesDir, newTilesDir);
+    }
+    
+    // Rename metadata files
+    const metadataDir = path.join(config.dziDir, 'metadata');
+    const oldLabelPath = path.join(metadataDir, `${actualBaseName}_label.jpg`);
+    const oldMacroPath = path.join(metadataDir, `${actualBaseName}_macro.jpg`);
+    const oldMetadataJsonPath = path.join(metadataDir, `${actualBaseName}_metadata.json`);
+    const newLabelPath = path.join(metadataDir, `${newUniqueName}_label.jpg`);
+    const newMacroPath = path.join(metadataDir, `${newUniqueName}_macro.jpg`);
+    const newMetadataJsonPath = path.join(metadataDir, `${newUniqueName}_metadata.json`);
+    
+    if (fs.existsSync(oldLabelPath)) {
+      fs.renameSync(oldLabelPath, newLabelPath);
+    }
+    
+    if (fs.existsSync(oldMacroPath)) {
+      fs.renameSync(oldMacroPath, newMacroPath);
+    }
+    
+    if (fs.existsSync(oldMetadataJsonPath)) {
+      fs.renameSync(oldMetadataJsonPath, newMetadataJsonPath);
+    }
+    
+    // Check if we actually deleted anything
+    if (deletedComponents.length === 0) {
+      return res.status(404).json({ 
+        error: 'No files found to delete',
+        message: `No DZI, metadata, or original files found for ${filename}`
+      });
+    }
+
+    res.json({ 
+      success: true, 
+      filename: actualBaseName,
+      deletedComponents,
+      message: deletedComponents.length > 0 ? `Deleted: ${deletedComponents.join(', ')}` : 'No files found to delete'
+    });
+    
+  } catch (error) {
+    console.error('Error renaming slide:', error);
+    res.status(500).json({ error: 'Failed to rename slide', details: error.message });
+  }
+});
+
+// API endpoint to generate label/thumbnail for a slide
+app.post('/api/slides/:filename/generate-thumbnail', async (req, res) => {
+  const filename = req.params.filename;
+  
+  if (config.isClientMode()) {
+    return res.status(501).json({ error: 'Thumbnail generation not available in client mode' });
+  }
+
+  try {
+    // Find the slide file
+    let actualSlidePath = null;
+    let actualBaseName = null;
+    
+    function findSlideFile(dir, relativePath = '') {
+      if (!fs.existsSync(dir)) return false;
+      
+      const items = fs.readdirSync(dir, { withFileTypes: true });
+      const supportedFormats = ['.svs', '.ndpi', '.tif', '.tiff', '.jp2', '.vms', '.vmu', '.scn'];
+      
+      for (const item of items) {
+        const fullPath = path.join(dir, item.name);
+        const relativeFilePath = path.join(relativePath, item.name);
+        
+        if (item.isDirectory()) {
+          if (findSlideFile(fullPath, relativeFilePath)) {
+            return true;
+          }
+        } else {
+          const ext = path.extname(item.name).toLowerCase();
+          if (supportedFormats.includes(ext)) {
+            const baseName = path.basename(item.name, ext);
+            const uniqueName = relativePath ? `${relativePath.replace(/[\\\/]/g, '_')}_${baseName}` : baseName;
+            
+            if (uniqueName === filename) {
+              actualSlidePath = fullPath;
+              actualBaseName = uniqueName;
+              return true;
+            }
+          }
+        }
+      }
+      return false;
+    }
+    
+    findSlideFile(config.slidesDir);
+    
+    if (!actualSlidePath) {
+      return res.status(404).json({ error: 'Slide file not found' });
+    }
+
+    // Generate thumbnail using slideMetadataExtractor
+    const slideMetadataExtractor = require('./slideMetadataExtractor');
+    const metadataDir = path.join(config.dziDir, 'metadata');
+    
+    if (!fs.existsSync(metadataDir)) {
+      fs.mkdirSync(metadataDir, { recursive: true });
+    }
+
+    await slideMetadataExtractor.extractMetadata(actualSlidePath, actualBaseName, metadataDir);
+    
+    // Check what was generated
+    const labelPath = path.join(metadataDir, `${actualBaseName}_label.jpg`);
+    const macroPath = path.join(metadataDir, `${actualBaseName}_macro.jpg`);
+    
+    const labelUrl = fs.existsSync(labelPath) ? `/dzi/metadata/${actualBaseName}_label.jpg` : null;
+    const macroUrl = fs.existsSync(macroPath) ? `/dzi/metadata/${actualBaseName}_macro.jpg` : null;
+    const thumbnailUrl = macroUrl || labelUrl || null;
+
+    res.json({
+      success: true,
+      labelUrl,
+      macroUrl,
+      thumbnailUrl,
+      message: 'Thumbnail generated successfully'
+    });
+
+  } catch (error) {
+    console.error('Error generating thumbnail:', error);
+    res.status(500).json({ error: 'Failed to generate thumbnail', details: error.message });
   }
 });
 
@@ -782,16 +1471,78 @@ if (config.isClientMode()) {
   });
 }
 
+// Cleanup function to remove leftover __delete_ directories
+function cleanupDeleteDirectories() {
+  try {
+    const dziDir = config.dziDir;
+    if (!fs.existsSync(dziDir)) return;
+    
+    const entries = fs.readdirSync(dziDir, { withFileTypes: true });
+    const deleteDirectories = entries.filter(entry => 
+      entry.isDirectory() && entry.name.startsWith('__delete_')
+    );
+    
+    if (deleteDirectories.length > 0) {
+      console.log(`Found ${deleteDirectories.length} leftover __delete_ directories, cleaning up...`);
+      
+      deleteDirectories.forEach(dir => {
+        const deletePath = path.join(dziDir, dir.name);
+        try {
+          if (process.platform === 'win32') {
+            const { exec } = require('child_process');
+            exec(`rmdir /s /q "${deletePath}"`, (error) => {
+              if (error) {
+                console.warn(`Failed to cleanup ${dir.name}:`, error.message);
+              } else {
+                console.log(`Cleaned up: ${dir.name}`);
+              }
+            });
+          } else {
+            fs.rmSync(deletePath, { recursive: true, force: true });
+            console.log(`Cleaned up: ${dir.name}`);
+          }
+        } catch (error) {
+          console.warn(`Failed to cleanup ${dir.name}:`, error.message);
+        }
+      });
+    }
+  } catch (error) {
+    console.warn('Error during __delete_ directory cleanup:', error.message);
+  }
+}
+
 // Create HTTP server
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, async () => {
   console.log(`\n=== PATHOLOGY SLIDE VIEWER ===`);
   console.log(`Mode: ${config.mode.toUpperCase()}`);
-  console.log(`Server: http://localhost:${PORT}`);
-  if (config.isClientMode()) {
-    console.log(`Lab Server: ${config.labServer.url}`);
+  console.log(`🌐 Main Server: http://localhost:${PORT}`);
+  
+  // Check conversion server connection status
+  if (config.isServerMode() && autoProcessor) {
+    try {
+      const health = await autoProcessor.conversionClient.getHealth();
+      console.log(`🔧 Conversion Server: http://localhost:3001 ✅ CONNECTED`);
+      console.log(`   └─ Max Concurrent: ${health.maxConcurrent} | Active: ${health.activeConversions} | Queue: ${health.queueLength}`);
+    } catch (error) {
+      console.log(`🔧 Conversion Server: http://localhost:3001 ❌ DISCONNECTED`);
+      console.log(`   └─ Error: ${error.message}`);
+    }
   }
+  
+  if (config.isClientMode()) {
+    console.log(`🏥 Lab Server: ${config.labServer.url}`);
+  }
+  
   console.log(`Configuration:`, config.getSummary());
   console.log(`=============================\n`);
+  
+  // Clean up any leftover __delete_ directories on startup
+  cleanupDeleteDirectories();
+  
+  // Set up periodic cleanup every 5 minutes when idle
+  setInterval(() => {
+    cleanupDeleteDirectories();
+  }, 5 * 60 * 1000);
 });
 
 // WebSocket server for real-time updates
@@ -809,17 +1560,38 @@ wss.on('connection', (ws) => {
     }));
   }
   
+  // Send current active conversions to restore progress bars on refresh
+  if (activeConversions.size > 0) {
+    activeConversions.forEach((conversionData, baseName) => {
+      // Send conversion_started to trigger UI setup
+      ws.send(JSON.stringify({
+        type: 'conversion_started',
+        filename: baseName
+      }));
+      
+      // Also send current progress if available
+      if (conversionData.lastProgress) {
+        ws.send(JSON.stringify({
+          type: 'conversion_progress',
+          filename: baseName,
+          ...conversionData.lastProgress
+        }));
+      }
+    });
+    console.log(`Sent ${activeConversions.size} active conversion states to new client`);
+  }
+  
   ws.on('close', () => {
     console.log('Client disconnected');
   });
 });
 
-// Initialize Auto Processor (only in server mode)
+// Initialize auto-processor in server mode (already declared at top)
 if (config.isServerMode()) {
-  autoProcessor = new AutoProcessor(config.slidesDir, convertSvsToDzi, {
-    enabled: config.autoProcessorEnabled,
-    maxRetries: 3,
-    retryDelay: 5000
+  const OptimizedAutoProcessor = require('./optimized-auto-processor');
+  autoProcessor = new OptimizedAutoProcessor(config.slidesDir, {
+    enabled: true,
+    conversionServerUrl: 'http://localhost:3001'
   });
 }
 
@@ -834,32 +1606,72 @@ if (config.isServerMode() && autoProcessor) {
     });
   });
 
-  autoProcessor.on('processingStarted', (fileInfo) => {
-    console.log(`Auto-processing started: ${fileInfo.fileName}`);
+  autoProcessor.on('processingStarted', (data) => {
+    console.log(`Auto-processing started: ${data.fileName}`);
     broadcastToClients({
       type: 'auto_processing_started',
-      fileName: fileInfo.fileName,
-      baseName: fileInfo.baseName
+      filename: data.fileName || data.filename,
+      fileName: data.fileName,
+      baseName: data.baseName
     });
   });
 
-  autoProcessor.on('processingCompleted', (data) => {
-    console.log(`Auto-processing completed: ${data.fileInfo.fileName}`);
+  autoProcessor.on('conversionProgress', (data) => {
+    console.log(`Auto-processing progress: ${data.fileName} - ${data.phase} ${data.percent}%`);
     broadcastToClients({
-      type: 'auto_conversion_complete',
-      fileName: data.fileInfo.baseName,
-      dziPath: `/dzi/${data.fileInfo.baseName}.dzi`,
-      metrics: data.result.metrics
+      type: 'conversion_progress',
+      filename: data.fileName || data.filename,
+      fileName: data.fileName,
+      baseName: data.baseName,
+      phase: data.phase,
+      percent: data.percent,
+      isAutoConversion: true
     });
   });
 
-  autoProcessor.on('processingFailed', (data) => {
-    console.log(`Auto-processing failed: ${data.fileInfo.fileName}`);
-    broadcastToClients({
-      type: 'auto_conversion_error',
-      fileName: data.fileInfo.baseName,
-      error: data.error.message
-    });
+  autoProcessor.on('fileProcessed', async (data) => {
+    console.log(`Auto-processing completed: ${data.fileName} - ${data.success ? 'SUCCESS' : 'FAILED'}`);
+    console.log(`Auto-delete config: ${config.autoDeleteOriginal}, filePath: ${data.filePath}`);
+    
+    if (data.success) {
+      // Check if auto-delete is enabled and delete original file
+      if (config.autoDeleteOriginal && data.filePath) {
+        try {
+          console.log(`Attempting to auto-delete: ${data.filePath}`);
+          if (fs.existsSync(data.filePath)) {
+            await deleteFileWithRetry(data.filePath, 3);
+            console.log(`✅ Auto-deleted original file: ${data.fileName}`);
+            broadcastToClients({
+              type: 'conversion_auto_delete',
+              filename: data.baseName,
+              originalFile: data.fileName
+            });
+          } else {
+            console.warn(`⚠️ Original file not found for auto-delete: ${data.filePath}`);
+          }
+        } catch (error) {
+          console.warn(`❌ Failed to auto-delete original file ${data.fileName}:`, error.message);
+        }
+      } else {
+        console.log(`Auto-delete skipped - enabled: ${config.autoDeleteOriginal}, filePath: ${!!data.filePath}`);
+      }
+      
+      broadcastToClients({
+        type: 'conversion_complete',
+        fileName: data.fileName,
+        baseName: data.baseName,
+        dziPath: `/dzi/${data.baseName}.dzi`,
+        isAutoConversion: true
+      });
+    } else {
+      broadcastToClients({
+        type: 'conversion_error',
+        fileName: data.fileName,
+        baseName: data.baseName,
+        error: data.error || 'Auto-conversion failed',
+        isAutoConversion: true
+      });
+    }
   });
 
   autoProcessor.on('fileRetry', (data) => {

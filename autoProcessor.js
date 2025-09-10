@@ -1,7 +1,8 @@
-const chokidar = require('chokidar');
-const path = require('path');
 const fs = require('fs');
+const path = require('path');
+const chokidar = require('chokidar');
 const EventEmitter = require('events');
+const WorkerPool = require('./workerPool');
 
 class AutoProcessor extends EventEmitter {
   constructor(slidesDir, convertFunction, options = {}) {
@@ -12,11 +13,22 @@ class AutoProcessor extends EventEmitter {
     this.isEnabled = options.enabled !== false; // Default to enabled
     this.maxRetries = options.maxRetries || 3;
     this.retryDelay = options.retryDelay || 5000; // 5 seconds
-    this.processingQueue = [];
-    this.isProcessing = false;
+    this.maxConcurrent = options.maxConcurrent || 6; // Increased to 6 parallel conversions
     this.supportedFormats = ['.svs', '.ndpi', '.tif', '.tiff', '.jp2', '.vms', '.vmu', '.scn'];
+    this.processedFiles = new Set();
+    this.processingQueue = [];
+    
+    // Initialize worker pool for isolated conversions
+    this.workerPool = new WorkerPool(this.maxConcurrent);
+    
+    // Forward worker pool events
+    this.workerPool.on('conversionStarted', (data) => this.emit('processingStarted', data));
+    this.workerPool.on('conversionProgress', (data) => this.emit('conversionProgress', data));
+    this.workerPool.on('conversionCompleted', (data) => this.emit('fileProcessed', { success: true, ...data }));
+    this.workerPool.on('conversionCancelled', (data) => this.emit('fileProcessed', { success: false, cancelled: true, ...data }));
+    this.workerPool.on('conversionError', (data) => this.emit('fileProcessed', { success: false, error: data.error, ...data }));
+    
     this.watcher = null;
-    this.processedFiles = new Set(); // Track processed files to avoid duplicates
     
     this.init();
   }
@@ -32,21 +44,34 @@ class AutoProcessor extends EventEmitter {
     console.log(`Supported formats: ${this.supportedFormats.join(', ')}`);
     console.log(`Max retries: ${this.maxRetries}`);
     console.log(`Retry delay: ${this.retryDelay}ms`);
+    console.log(`Max concurrent: ${this.maxConcurrent}`);
     console.log(`=====================================\n`);
 
     this.startWatching();
   }
 
   startWatching() {
-    // Configure chokidar watcher
+    // Configure chokidar watcher with recursive subfolder support
     this.watcher = chokidar.watch(this.slidesDir, {
-      ignored: /(^|[\/\\])\../, // Ignore dotfiles
+      ignored: [
+        /(^|[\/\\])\../, // Ignore dotfiles
+        /.*\.tmp$/, // Ignore temporary files
+        /.*\.temp$/, // Ignore temp files
+        /.*\.part$/, // Ignore partial downloads
+        /.*\.crdownload$/, // Ignore Chrome downloads
+        /.*\.download$/ // Ignore other download files
+      ],
       persistent: true,
       ignoreInitial: false, // Process existing files on startup
+      depth: undefined, // Watch all subdirectories recursively
+      followSymlinks: false,
       awaitWriteFinish: {
-        stabilityThreshold: 3000, // Wait 3 seconds after file stops changing (increased for file locking)
-        pollInterval: 100
-      }
+        stabilityThreshold: 15000, // Wait 15 seconds after file stops changing (increased for large file transfers)
+        pollInterval: 1000 // Check every second instead of 500ms to reduce CPU usage
+      },
+      // Additional stability options
+      usePolling: false, // Use native file system events (faster)
+      atomic: true // Wait for atomic writes to complete
     });
 
     this.watcher
@@ -58,7 +83,8 @@ class AutoProcessor extends EventEmitter {
       })
       .on('error', (error) => {
         console.error('Auto-processor watcher error:', error);
-        this.emit('error', error);
+        // Don't emit error to prevent server crash - just log and continue
+        // this.emit('error', error);
       });
   }
 
@@ -71,18 +97,62 @@ class AutoProcessor extends EventEmitter {
       return;
     }
 
-    // Check if file was already processed
+    // CRITICAL FIX: Check if file was already processed OR is currently being processed
     if (this.processedFiles.has(filePath)) {
       return;
     }
 
-    // Check if file already has a DZI conversion
+    // Generate unique name for files in subfolders to avoid conflicts
+    const relativePath = path.relative(this.slidesDir, path.dirname(filePath));
     const baseName = path.basename(fileName, fileExt);
-    const dziPath = path.join(path.dirname(this.slidesDir), 'dzi', `${baseName}.dzi`);
+    const uniqueName = relativePath && relativePath !== '.' ? 
+      `${relativePath.replace(/[\\\/]/g, '_')}_${baseName}` : baseName;
+    
+    // Check if file already has a DZI conversion using unique name
+    const dziPath = path.join(path.dirname(this.slidesDir), 'dzi', `${uniqueName}.dzi`);
     
     if (fs.existsSync(dziPath)) {
       console.log(`Skipping ${fileName} - DZI already exists`);
       this.processedFiles.add(filePath);
+      return;
+    }
+
+    // CRITICAL FIX: Check if file is currently being processed by worker pool (by filename OR unique name)
+    const workerStatus = this.workerPool.getStatus();
+    if (workerStatus.processingFiles.includes(fileName) || workerStatus.processingFiles.includes(uniqueName)) {
+      console.log(`Skipping ${fileName} - already being processed by worker`);
+      // Mark as processed to prevent future re-triggers during conversion
+      this.processedFiles.add(filePath);
+      return;
+    }
+
+    // CRITICAL FIX: Check if file is already in queue (by filename OR unique name)
+    const alreadyQueued = this.processingQueue.some(item => 
+      item.fileName === fileName || item.baseName === uniqueName || item.filePath === filePath
+    );
+    if (alreadyQueued) {
+      console.log(`Skipping ${fileName} - already in queue`);
+      // Mark as processed to prevent future re-triggers
+      this.processedFiles.add(filePath);
+      return;
+    }
+
+    // CRITICAL FIX: Additional check for file stability - ensure file isn't being written to
+    try {
+      const stats = fs.statSync(filePath);
+      const fileAge = Date.now() - stats.mtime.getTime();
+      if (fileAge < 5000) { // File modified less than 5 seconds ago
+        console.log(`Skipping ${fileName} - file too recent (${fileAge}ms), may still be copying`);
+        // Schedule a recheck in 10 seconds
+        setTimeout(() => {
+          if (!this.processedFiles.has(filePath)) {
+            this.handleFileAdded(filePath);
+          }
+        }, 10000);
+        return;
+      }
+    } catch (error) {
+      console.log(`Skipping ${fileName} - cannot access file stats:`, error.message);
       return;
     }
 
@@ -92,16 +162,19 @@ class AutoProcessor extends EventEmitter {
     console.log(`Format: ${fileExt}`);
     console.log(`========================\n`);
 
+    // Mark as processed immediately to prevent duplicate triggers
+    this.processedFiles.add(filePath);
+
     // Add to processing queue
     this.addToQueue({
       filePath,
       fileName,
-      baseName,
+      baseName: uniqueName, // Use unique name for subfolder files
       retryCount: 0,
       addedAt: new Date()
     });
 
-    this.emit('fileDetected', { filePath, fileName, baseName });
+    this.emit('fileDetected', { filePath, fileName, baseName: uniqueName });
   }
 
   handleFileDeleted(filePath) {
@@ -142,7 +215,7 @@ class AutoProcessor extends EventEmitter {
     // Check if file is already in queue
     const existingIndex = this.processingQueue.findIndex(item => item.filePath === fileInfo.filePath);
     if (existingIndex !== -1) {
-      console.log(`File ${fileInfo.fileName} is already in processing queue`);
+      console.log(`File ${fileInfo.fileName} is already in queue, skipping`);
       return;
     }
 
@@ -154,183 +227,103 @@ class AutoProcessor extends EventEmitter {
       added: fileInfo
     });
 
-    // Start processing if not already running
-    if (!this.isProcessing) {
-      this.processQueue();
-    }
+    // Start processing with worker pool
+    this.processWithWorkers();
   }
 
-  async processQueue() {
-    if (this.isProcessing || this.processingQueue.length === 0) {
+  async processWithWorkers() {
+    if (this.processingQueue.length === 0) {
       return;
     }
 
-    this.isProcessing = true;
-    console.log(`\n=== QUEUE PROCESSING STARTED ===`);
+    const workerStatus = this.workerPool.getStatus();
+    console.log(`\n=== WORKER POOL PROCESSING ===`);
     console.log(`Queue length: ${this.processingQueue.length}`);
+    console.log(`Active workers: ${workerStatus.activeWorkers}/${workerStatus.maxWorkers}`);
     console.log(`===============================\n`);
 
-    while (this.processingQueue.length > 0) {
+    // Process items from queue with worker pool
+    while (this.processingQueue.length > 0 && workerStatus.activeWorkers < workerStatus.maxWorkers) {
       const fileInfo = this.processingQueue.shift();
       
       try {
-        await this.processFile(fileInfo);
-        this.processedFiles.add(fileInfo.filePath);
+        console.log(`Starting worker for: ${fileInfo.fileName}`);
         
-        this.emit('fileProcessed', {
-          success: true,
+        // Start worker for this file
+        this.workerPool.processSlide(
           fileInfo,
-          queueLength: this.processingQueue.length
+          {
+            slidesDir: this.slidesDir,
+            dziDir: path.join(path.dirname(this.slidesDir), 'dzi')
+          },
+          {} // vips config passed to worker
+        ).then(result => {
+          console.log(`Worker completed for ${fileInfo.fileName}:`, result.success ? 'SUCCESS' : 'FAILED');
+          if (!result.success && !result.cancelled && fileInfo.retryCount < this.maxRetries) {
+            // Retry logic
+            fileInfo.retryCount++;
+            console.log(`Scheduling retry ${fileInfo.retryCount}/${this.maxRetries} for ${fileInfo.fileName}`);
+            setTimeout(() => {
+              this.addToQueue(fileInfo);
+            }, this.retryDelay);
+          }
+        }).catch(error => {
+          console.error(`Worker error for ${fileInfo.fileName}:`, error.message);
+          if (fileInfo.retryCount < this.maxRetries) {
+            fileInfo.retryCount++;
+            console.log(`Scheduling retry ${fileInfo.retryCount}/${this.maxRetries} for ${fileInfo.fileName}`);
+            setTimeout(() => {
+              this.addToQueue(fileInfo);
+            }, this.retryDelay);
+          }
         });
-
-      } catch (error) {
-        console.error(`Processing failed for ${fileInfo.fileName}:`, error.message);
         
-        // Handle retry logic
-        if (fileInfo.retryCount < this.maxRetries) {
-          fileInfo.retryCount++;
-          console.log(`Scheduling retry ${fileInfo.retryCount}/${this.maxRetries} for ${fileInfo.fileName} in ${this.retryDelay}ms`);
-          
-          setTimeout(() => {
-            this.addToQueue(fileInfo);
-          }, this.retryDelay);
-
-          this.emit('fileRetry', {
-            fileInfo,
-            retryCount: fileInfo.retryCount,
-            maxRetries: this.maxRetries
-          });
-
-        } else {
-          console.error(`Max retries exceeded for ${fileInfo.fileName}`);
-          this.emit('fileProcessed', {
-            success: false,
-            fileInfo,
-            error: error.message,
-            queueLength: this.processingQueue.length
-          });
-        }
+      } catch (error) {
+        console.error(`Failed to start worker for ${fileInfo.fileName}:`, error);
       }
-
-      // Emit queue update
-      this.emit('queueUpdated', {
-        queueLength: this.processingQueue.length,
-        processed: fileInfo
-      });
-    }
-
-    this.isProcessing = false;
-    console.log(`\n=== QUEUE PROCESSING COMPLETED ===\n`);
-    this.emit('queueEmpty');
-  }
-
-  async processFile(fileInfo) {
-    const { filePath, fileName, baseName } = fileInfo;
-    
-    console.log(`\n=== AUTO-PROCESSING STARTED ===`);
-    console.log(`File: ${fileName}`);
-    console.log(`Started: ${new Date().toLocaleTimeString()}`);
-    console.log(`==============================\n`);
-
-    this.emit('processingStarted', fileInfo);
-
-    try {
-      // Call the existing conversion function
-      const result = await this.convertFunction(filePath, baseName);
       
-      console.log(`\n=== AUTO-PROCESSING COMPLETED ===`);
-      console.log(`File: ${fileName}`);
-      console.log(`Completed: ${new Date().toLocaleTimeString()}`);
-      console.log(`DZI Path: ${result.dziPath}`);
-      console.log(`================================\n`);
-
-      this.emit('processingCompleted', {
-        fileInfo,
-        result
-      });
-
-      return result;
-
-    } catch (error) {
-      console.error(`\n=== AUTO-PROCESSING FAILED ===`);
-      console.error(`File: ${fileName}`);
-      console.error(`Error: ${error.message}`);
-      console.error(`=============================\n`);
-
-      this.emit('processingFailed', {
-        fileInfo,
-        error
-      });
-
-      throw error;
+      // Update status for next iteration
+      const newStatus = this.workerPool.getStatus();
+      workerStatus.activeWorkers = newStatus.activeWorkers;
     }
   }
 
-  // Control methods
-  enable() {
-    if (this.isEnabled) return;
-    
-    this.isEnabled = true;
-    console.log('Auto-processing enabled');
-    this.startWatching();
-    this.emit('enabled');
+  // Cancel conversion for a specific file
+  cancelConversion(filename) {
+    return this.workerPool.cancelConversion(filename);
   }
 
-  disable() {
-    if (!this.isEnabled) return;
-    
-    this.isEnabled = false;
-    console.log('Auto-processing disabled');
-    
-    if (this.watcher) {
-      this.watcher.close();
-      this.watcher = null;
-    }
-    
-    this.emit('disabled');
-  }
-
-  // Status methods
+  // Get current status including worker pool
   getStatus() {
+    const workerStatus = this.workerPool.getStatus();
     return {
       enabled: this.isEnabled,
-      isProcessing: this.isProcessing,
       queueLength: this.processingQueue.length,
-      processedCount: this.processedFiles.size,
-      supportedFormats: this.supportedFormats
+      activeWorkers: workerStatus.activeWorkers,
+      maxWorkers: workerStatus.maxWorkers,
+      processingFiles: workerStatus.processingFiles,
+      processedCount: this.processedFiles.size
     };
   }
 
-  // Clear processed files tracking (useful for testing or manual reset)
-  clearProcessedFiles() {
-    const count = this.processedFiles.size;
-    this.processedFiles.clear();
-    console.log(`Cleared ${count} processed files from tracking`);
-    this.emit('processedFilesCleared', { count });
-    return count;
-  }
-
+  // Get current queue
   getQueue() {
     return this.processingQueue.map(item => ({
       fileName: item.fileName,
+      filePath: item.filePath,
       retryCount: item.retryCount,
       addedAt: item.addedAt
     }));
   }
 
-  // Cleanup
-  destroy() {
-    console.log('Shutting down auto-processor...');
-    
+  // Cleanup method
+  async cleanup() {
     if (this.watcher) {
-      this.watcher.close();
+      await this.watcher.close();
     }
-    
-    this.processingQueue = [];
-    this.processedFiles.clear();
-    this.removeAllListeners();
-    
-    console.log('Auto-processor shutdown complete');
+    if (this.workerPool) {
+      await this.workerPool.shutdown();
+    }
   }
 }
 

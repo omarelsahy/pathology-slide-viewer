@@ -38,11 +38,12 @@ class VipsConfig {
       VIPS_BUFFER_SIZE: (this.tileBufferSize * 1024 * 1024).toString(),
       
       // Progress reporting
-      VIPS_PROGRESS: '1',
+      VIPS_PROGRESS: process.env.VIPS_PROGRESS || '1',
+      VIPS_INFO: process.env.VIPS_INFO || '1',
       
       // Disable some checks for performance
       VIPS_NOVECTOR: '0', // Enable vectorization
-      VIPS_WARNING: '0'   // Reduce warning output
+      VIPS_WARNING: process.env.VIPS_WARNING || '1'   // Show warnings by default
     };
   }
 
