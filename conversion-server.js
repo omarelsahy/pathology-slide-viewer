@@ -19,7 +19,7 @@ class ConversionServer extends EventEmitter {
     super();
     
     this.port = options.port || 3001;
-    this.maxConcurrent = options.maxConcurrent || Math.min(os.cpus().length, 8);
+    this.maxConcurrent = options.maxConcurrent || Math.min(os.cpus().length, 8); // Restored to 8 with compressed TIFF
     this.activeConversions = new Map();
     this.conversionQueue = [];
     this.completedConversions = new Set();
@@ -256,7 +256,7 @@ class ConversionServer extends EventEmitter {
     return new Promise((resolve, reject) => {
       const { inputPath, outputBaseName } = conversionState;
       const tempDir = os.tmpdir();
-      const tempPath = path.join(tempDir, `${outputBaseName}_icc_optimized.v`);
+      const tempPath = path.join(tempDir, `${outputBaseName}_icc_optimized.tif`);
       
       // Update state
       conversionState.phase = 'ICC Color Transform';
@@ -284,7 +284,7 @@ class ConversionServer extends EventEmitter {
       const args = [
         'icc_transform',
         inputPath,
-        tempPath,
+        `${tempPath}[compression=lzw,Q=95]`, // Use LZW compression with high quality
         sRgbProfile,
         '--embedded=true',
         `--vips-concurrency=${optimalConcurrency}`,

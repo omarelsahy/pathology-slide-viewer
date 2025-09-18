@@ -2164,8 +2164,9 @@ app.delete('/api/slides/:filename', async (req, res) => {
         
         if (item.isDirectory()) {
           // Recursively search subdirectories
-          if (await findAndDeleteOriginal(fullPath, relativeFilePath)) {
-            return true;
+          const result = await findAndDeleteOriginal(fullPath, relativeFilePath);
+          if (result) {
+            return result;
           }
         } else if (item.isFile()) {
           const ext = path.extname(item.name).toLowerCase();
@@ -2175,21 +2176,8 @@ app.delete('/api/slides/:filename', async (req, res) => {
             
             if (uniqueName === baseName) {
               console.log(`Found original slide: ${fullPath}`);
-              try {
-                await deleteFileWithRetry(fullPath, 5);
-                deletedFiles.push('original');
-                console.log(`Deleted original slide: ${fullPath}`);
-                return true;
-              } catch (error) {
-                console.error(`Failed to delete original slide: ${error.message}`);
-                res.status(423).json({ 
-                  error: 'File is locked by running processes', 
-                  details: error.message,
-                  suggestion: 'Try using the "Kill VIPS Processes" button and then delete again',
-                  filename: filename
-                });
-                return false;
-              }
+              // Store path for later deletion after DZI cleanup
+              return { found: true, path: fullPath };
             }
           }
         }
@@ -2197,82 +2185,176 @@ app.delete('/api/slides/:filename', async (req, res) => {
       return false;
     }
     
-    originalDeleted = await findAndDeleteOriginal(config.slidesDir);
+    const originalSlideResult = await findAndDeleteOriginal(config.slidesDir);
+    let originalSlidePath = null;
+    let renamedSlidePath = null;
     
-    // 2. Delete DZI file if it exists
-    const dziPath = path.join(config.dziDir, `${baseName}.dzi`);
-    if (fs.existsSync(dziPath)) {
+    if (originalSlideResult && originalSlideResult.found) {
+      originalSlidePath = originalSlideResult.path;
+      
+      // Immediately rename .svs to __delete_ so it disappears from GUI
+      const slideDir = path.dirname(originalSlidePath);
+      const slideExt = path.extname(originalSlidePath);
+      renamedSlidePath = path.join(slideDir, `__delete_${baseName}_${Date.now()}${slideExt}`);
+      
       try {
-        await deleteFileWithRetry(dziPath, 5);
-        deletedFiles.push('dzi');
-        console.log(`Deleted DZI file: ${dziPath}`);
-      } catch (error) {
-        console.warn(`Failed to delete DZI file: ${error.message}`);
-        // Try to change file permissions and retry
+        fs.renameSync(originalSlidePath, renamedSlidePath);
+        console.log(`✅ Original slide renamed for deletion: ${path.basename(originalSlidePath)} → ${path.basename(renamedSlidePath)}`);
+      } catch (renameError) {
+        console.warn(`Failed to rename original slide: ${renameError.message}`);
+        renamedSlidePath = null; // Keep original path if rename failed
+      }
+    }
+    
+    // 2. Delete organized slide folder (contains DZI, tiles, and metadata)
+    const organizedSlideDir = path.join(config.dziDir, baseName);
+    if (fs.existsSync(organizedSlideDir)) {
+      try {
+        // Use robocopy mirror method for ultra-fast deletion
+        const { spawn } = require('child_process');
+        const tempEmptyDir = path.join(config.dziDir, `__empty_${Date.now()}`);
+        
+        // Create temporary empty directory
+        fs.mkdirSync(tempEmptyDir, { recursive: true });
+        
+        console.log(`Using robocopy mirror method to delete: ${organizedSlideDir}`);
+        
+        // Immediately rename folder to __delete_ so it appears gone from GUI
+        const deletingDir = path.join(config.dziDir, `__delete_${baseName}_${Date.now()}`);
         try {
-          fs.chmodSync(dziPath, 0o666);
-          fs.unlinkSync(dziPath);
-          deletedFiles.push('dzi');
-          console.log(`Deleted DZI file after permission change: ${dziPath}`);
-        } catch (permError) {
-          console.warn(`Failed to delete DZI file even after permission change: ${permError.message}`);
-          // Final fallback: rename file for later cleanup
+          fs.renameSync(organizedSlideDir, deletingDir);
+          deletedFiles.push('organized-folder-robocopy');
+          console.log(`✅ Folder renamed for background deletion: ${organizedSlideDir} → ${path.basename(deletingDir)}`);
+        } catch (renameError) {
+          console.warn(`Failed to rename folder for deletion: ${renameError.message}`);
+          // Continue with original path if rename failed
+        }
+        
+        const targetDir = fs.existsSync(deletingDir) ? deletingDir : organizedSlideDir;
+        
+        // Use spawn instead of execSync to avoid ENOBUFS buffer overflow
+        const robocopyProcess = spawn('robocopy', [
+          tempEmptyDir,
+          targetDir,
+          '/MIR', '/NFL', '/NDL', '/NJH', '/NJS', '/NC', '/NS', '/NP'
+        ], { 
+          stdio: 'pipe',
+          windowsHide: true 
+        });
+        
+        let robocopySuccess = false;
+        
+        robocopyProcess.on('close', (code) => {
+          // Robocopy exit codes: 0-3 are success, others are errors
+          if (code <= 3) {
+            robocopySuccess = true;
+            try {
+              // Remove the now-empty target directory
+              fs.rmSync(targetDir, { recursive: true, force: true });
+              console.log(`✅ Background robocopy cleanup completed: ${path.basename(targetDir)}`);
+            } catch (rmdirError) {
+              console.warn(`Failed to remove directory after robocopy: ${rmdirError.message}`);
+              // Try alternative cleanup methods
+              try {
+                // Force delete with more aggressive options
+                fs.rmSync(targetDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 1000 });
+                console.log(`✅ Force deleted directory: ${path.basename(targetDir)}`);
+              } catch (forceError) {
+                console.warn(`Directory queued for manual cleanup: ${targetDir}`);
+              }
+            }
+          }
+          
+          // Clean up temporary empty directory
+          try { fs.rmdirSync(tempEmptyDir); } catch {}
+          
+          // If robocopy failed, try standard deletion
+          if (!robocopySuccess) {
+            console.warn(`Robocopy failed with code ${code}, trying standard deletion`);
+            try {
+              fs.rmSync(targetDir, { recursive: true, force: true });
+              console.log(`Deleted folder (standard fallback): ${path.basename(targetDir)}`);
+            } catch (standardError) {
+              console.warn(`Standard deletion failed: ${standardError.message}`);
+            }
+          }
+        });
+        
+        // Wait for robocopy to complete with timeout
+        await new Promise((resolve) => {
+          const timeout = setTimeout(() => {
+            robocopyProcess.kill();
+            resolve();
+          }, 30000); // 30 second timeout
+          
+          robocopyProcess.on('close', () => {
+            clearTimeout(timeout);
+            resolve();
+          });
+        });
+        
+      } catch (error) {
+        console.warn(`Failed to set up robocopy deletion: ${error.message}`);
+        // Fallback to standard deletion
+        try {
+          fs.rmSync(organizedSlideDir, { recursive: true, force: true });
+          deletedFiles.push('organized-folder-fallback');
+          console.log(`Deleted organized slide folder (fallback): ${organizedSlideDir}`);
+        } catch (fallbackError) {
+          console.warn(`All deletion methods failed: ${fallbackError.message}`);
+        }
+      }
+    } else {
+      // Fallback: Check for legacy structure files
+      console.log(`No organized folder found, checking legacy structure...`);
+      
+      // Delete legacy DZI file
+      const legacyDziPath = path.join(config.dziDir, `${baseName}.dzi`);
+      if (fs.existsSync(legacyDziPath)) {
+        try {
+          await deleteFileWithRetry(legacyDziPath, 5);
+          deletedFiles.push('legacy-dzi');
+          console.log(`Deleted legacy DZI file: ${legacyDziPath}`);
+        } catch (error) {
+          console.warn(`Failed to delete legacy DZI file: ${error.message}`);
+        }
+      }
+      
+      // Delete legacy tiles folder
+      const legacyTilesDir = path.join(config.dziDir, `${baseName}_files`);
+      if (fs.existsSync(legacyTilesDir)) {
+        try {
+          fs.rmSync(legacyTilesDir, { recursive: true, force: true });
+          deletedFiles.push('legacy-tiles');
+          console.log(`Deleted legacy tiles directory: ${legacyTilesDir}`);
+        } catch (error) {
+          console.warn(`Failed to delete legacy tiles directory: ${error.message}`);
+        }
+      }
+      
+      // Delete legacy metadata files
+      const legacyMetadataDir = path.join(config.dziDir, 'metadata');
+      const metadataFiles = [
+        { path: path.join(legacyMetadataDir, `${baseName}_label.jpg`), type: 'label' },
+        { path: path.join(legacyMetadataDir, `${baseName}_macro.jpg`), type: 'macro' },
+        { path: path.join(legacyMetadataDir, `${baseName}_metadata.json`), type: 'metadata' },
+        { path: path.join(legacyMetadataDir, `${baseName}.icc`), type: 'icc' }
+      ];
+      
+      for (const file of metadataFiles) {
+        if (fs.existsSync(file.path)) {
           try {
-            const deletedDziPath = path.join(config.dziDir, `__delete_${baseName}_${Date.now()}.dzi`);
-            fs.renameSync(dziPath, deletedDziPath);
-            deletedFiles.push('dzi-queued');
-            console.log(`DZI file queued for deletion: ${deletedDziPath}`);
-          } catch (renameError) {
-            console.warn(`Could not even rename DZI file for deletion queue: ${renameError.message}`);
+            fs.unlinkSync(file.path);
+            deletedFiles.push(`legacy-${file.type}`);
+            console.log(`Deleted legacy ${file.type} file: ${file.path}`);
+          } catch (error) {
+            console.warn(`Failed to delete legacy ${file.type} file: ${error.message}`);
           }
         }
       }
     }
     
-    // 3. Delete tiles folder if it exists
-    const tilesDir = path.join(config.dziDir, `${baseName}_files`);
-    if (fs.existsSync(tilesDir)) {
-      try {
-        // Try to rename for bulk deletion first
-        const deletedTilesDir = path.join(config.dziDir, `__deleted_${baseName}_${Date.now()}`);
-        fs.renameSync(tilesDir, deletedTilesDir);
-        deletedFiles.push('tiles');
-        console.log(`Tiles directory renamed for cleanup: ${deletedTilesDir}`);
-      } catch (renameError) {
-        console.warn(`Failed to rename tiles directory, trying direct deletion: ${renameError.message}`);
-        // Fallback to direct deletion
-        try {
-          fs.rmSync(tilesDir, { recursive: true, force: true });
-          deletedFiles.push('tiles');
-          console.log(`Deleted tiles directory: ${tilesDir}`);
-        } catch (rmError) {
-          console.warn(`Failed to delete tiles directory: ${rmError.message}`);
-        }
-      }
-    }
-    
-    // 4. Delete metadata files if they exist
-    const metadataDir = path.join(config.dziDir, 'metadata');
-    const metadataFiles = [
-      { path: path.join(metadataDir, `${baseName}_label.jpg`), type: 'label' },
-      { path: path.join(metadataDir, `${baseName}_macro.jpg`), type: 'macro' },
-      { path: path.join(metadataDir, `${baseName}_metadata.json`), type: 'metadata' },
-      { path: path.join(metadataDir, `${baseName}.icc`), type: 'icc' }
-    ];
-    
-    for (const file of metadataFiles) {
-      if (fs.existsSync(file.path)) {
-        try {
-          fs.unlinkSync(file.path);
-          deletedFiles.push(file.type);
-          console.log(`Deleted ${file.type} file: ${file.path}`);
-        } catch (error) {
-          console.warn(`Failed to delete ${file.type} file: ${error.message}`);
-        }
-      }
-    }
-    
-    // 5. Delete cancellation flag if it exists
+    // 3. Delete cancellation flag if it exists
     const cancelledFlagFile = path.join(config.slidesDir, `.${baseName}.cancelled`);
     if (fs.existsSync(cancelledFlagFile)) {
       try {
@@ -2284,7 +2366,71 @@ app.delete('/api/slides/:filename', async (req, res) => {
       }
     }
     
+    // 4. Handle original slide deletion or rollback based on DZI deletion success
+    const dziDeletionSucceeded = (deletedFiles.includes('organized-folder-robocopy') || 
+                                  deletedFiles.includes('organized-folder-standard') || 
+                                  deletedFiles.includes('organized-folder-fallback') ||
+                                  deletedFiles.some(file => file.startsWith('legacy-')));
+    
+    if (originalSlidePath) {
+      if (dziDeletionSucceeded) {
+        // DZI deletion succeeded - delete the renamed slide file
+        const slideToDelete = renamedSlidePath || originalSlidePath;
+        try {
+          await deleteFileWithRetry(slideToDelete, 5);
+          deletedFiles.push('original');
+          console.log(`✅ Deleted original slide after DZI cleanup: ${path.basename(slideToDelete)}`);
+        } catch (error) {
+          console.error(`Failed to delete original slide: ${error.message}`);
+          // Don't fail the entire operation if we can't delete the original
+          deletedFiles.push('original-failed');
+          
+          // If we can't delete the renamed file, try to restore original name
+          if (renamedSlidePath && renamedSlidePath !== originalSlidePath) {
+            try {
+              fs.renameSync(renamedSlidePath, originalSlidePath);
+              console.log(`⚠️  Restored original slide name after deletion failure: ${path.basename(originalSlidePath)}`);
+            } catch (restoreError) {
+              console.warn(`Failed to restore original slide name: ${restoreError.message}`);
+            }
+          }
+        }
+      } else {
+        // DZI deletion failed - restore original slide name if it was renamed
+        if (renamedSlidePath && renamedSlidePath !== originalSlidePath) {
+          try {
+            fs.renameSync(renamedSlidePath, originalSlidePath);
+            console.log(`🔄 Restored original slide name after DZI deletion failure: ${path.basename(originalSlidePath)}`);
+          } catch (restoreError) {
+            console.warn(`Failed to restore original slide name: ${restoreError.message}`);
+          }
+        }
+        console.warn(`DZI deletion failed, keeping original slide: ${path.basename(originalSlidePath)}`);
+      }
+    }
+    
     console.log(`Deletion summary for ${baseName}: ${deletedFiles.join(', ')}`);
+    
+    // 5. Clean up empty parent DZI directory if it exists and is empty
+    try {
+      const dziParentDir = config.dziDir;
+      if (fs.existsSync(dziParentDir)) {
+        const remainingItems = fs.readdirSync(dziParentDir);
+        // Filter out temporary directories and check if only system files remain
+        const realItems = remainingItems.filter(item => 
+          !item.startsWith('__empty_') && 
+          !item.startsWith('__delete_') && 
+          !item.startsWith('.')
+        );
+        
+        if (realItems.length === 0) {
+          console.log(`DZI parent directory is empty, removing: ${dziParentDir}`);
+          // Don't delete the main DZI directory, just log it's empty
+        }
+      }
+    } catch (error) {
+      console.warn(`Failed to check DZI parent directory: ${error.message}`);
+    }
     
     // Check if we actually deleted anything
     if (deletedFiles.length === 0) {
