@@ -782,37 +782,37 @@ async function loadConfig() {
 // Update UI elements from configuration
 function updateUIFromConfig() {
     // Folder paths
-    elements.sourcePath.textContent = currentConfig.sourceDir || 'Select folder...';
-    elements.destPath.textContent = currentConfig.destinationDir || 'Select folder...';
+    if (elements.sourcePath) elements.sourcePath.textContent = currentConfig.sourceDir || 'Select folder...';
+    if (elements.destPath) elements.destPath.textContent = currentConfig.destinationDir || 'Select folder...';
     
     // VIPS settings
     const vips = currentConfig.vipsSettings || {};
-    elements.concurrency.value = vips.concurrency || 8;
-    elements.maxMemory.value = vips.maxMemoryMB || 4096;
-    elements.bufferSize.value = vips.bufferSizeMB || 512;
-    elements.tileSize.value = vips.tileSize || 256;
-    elements.quality.value = vips.quality || 90;
-    elements.qualityValue.textContent = vips.quality || 90;
+    if (elements.concurrency) elements.concurrency.value = vips.concurrency || 8;
+    if (elements.maxMemory) elements.maxMemory.value = vips.maxMemoryMB || 4096;
+    if (elements.bufferSize) elements.bufferSize.value = vips.bufferSizeMB || 512;
+    if (elements.tileSize) elements.tileSize.value = vips.tileSize || 256;
+    if (elements.quality) elements.quality.value = vips.quality || 90;
+    if (elements.qualityValue) elements.qualityValue.textContent = vips.quality || 90;
     
     // ICC Profile
-    elements.autoDetectSrgb.checked = vips.autoDetectSrgb !== false;
-    elements.colorTransform.value = vips.colorTransform || 'auto';
+    if (elements.autoDetectSrgb) elements.autoDetectSrgb.checked = vips.autoDetectSrgb !== false;
+    if (elements.colorTransform) elements.colorTransform.value = vips.colorTransform || 'auto';
     
     // VIPS Logging
-    elements.vipsProgress.checked = vips.progress !== false;
-    elements.vipsInfo.checked = vips.info !== false;
-    elements.vipsWarning.checked = vips.warning !== false;
+    if (elements.vipsProgress) elements.vipsProgress.checked = vips.progress !== false;
+    if (elements.vipsInfo) elements.vipsInfo.checked = vips.info !== false;
+    if (elements.vipsWarning) elements.vipsWarning.checked = vips.warning !== false;
     
     // Conversion Options
-    elements.autoDeleteOriginal.checked = currentConfig.autoDeleteOriginal === true;
+    if (elements.autoDeleteOriginal) elements.autoDeleteOriginal.checked = currentConfig.autoDeleteOriginal === true;
     
     // Advanced settings
-    elements.serverPort.value = currentConfig.serverPort || 3000;
-    elements.overlap.value = vips.overlap || 1;
-    elements.layout.value = vips.layout || 'dz';
-    elements.embedIcc.checked = vips.embedIcc === true;
-    elements.sequential.checked = vips.sequential !== false;
-    elements.novector.checked = vips.novector === true;
+    if (elements.serverPort) elements.serverPort.value = currentConfig.serverPort || 3000;
+    if (elements.overlap) elements.overlap.value = vips.overlap || 1;
+    if (elements.layout) elements.layout.value = vips.layout || 'dz';
+    if (elements.embedIcc) elements.embedIcc.checked = vips.embedIcc === true;
+    if (elements.sequential) elements.sequential.checked = vips.sequential !== false;
+    if (elements.novector) elements.novector.checked = vips.novector === true;
 }
 
 // Save configuration to server
@@ -898,13 +898,17 @@ function setupEventListeners() {
     ];
     
     configInputs.forEach(input => {
-        input.addEventListener('change', saveConfig);
+        if (input) {
+            input.addEventListener('change', saveConfig);
+        }
     });
     
     // Quality slider real-time update
-    elements.quality.addEventListener('input', () => {
-        elements.qualityValue.textContent = elements.quality.value;
-    });
+    if (elements.quality && elements.qualityValue) {
+        elements.quality.addEventListener('input', () => {
+            elements.qualityValue.textContent = elements.quality.value;
+        });
+    }
     
     // Tab switching
     elements.tabs.forEach(tab => {
@@ -912,16 +916,18 @@ function setupEventListeners() {
     });
     
     // Slides management
-    elements.scanSlidesBtn.addEventListener('click', scanSlides);
-    elements.refreshSlidesBtn.addEventListener('click', scanSlides);
-    elements.importSlidesBtn.addEventListener('click', () => elements.importSlidesInput.click());
-    elements.importSlidesInput.addEventListener('change', handleImportSlides);
+    if (elements.scanSlidesBtn) elements.scanSlidesBtn.addEventListener('click', scanSlides);
+    if (elements.refreshSlidesBtn) elements.refreshSlidesBtn.addEventListener('click', scanSlides);
+    if (elements.importSlidesBtn && elements.importSlidesInput) {
+        elements.importSlidesBtn.addEventListener('click', () => elements.importSlidesInput.click());
+    }
+    if (elements.importSlidesInput) elements.importSlidesInput.addEventListener('change', handleImportSlides);
     
     // VIPS Info
-    elements.getVipsInfoBtn.addEventListener('click', getVipsInfo);
+    if (elements.getVipsInfoBtn) elements.getVipsInfoBtn.addEventListener('click', getVipsInfo);
     
     // Console controls
-    elements.clearConsoleBtn.addEventListener('click', clearConsole);
+    if (elements.clearConsoleBtn) elements.clearConsoleBtn.addEventListener('click', clearConsole);
 }
 
 // Server management
@@ -1197,14 +1203,18 @@ function renderSlides() {
 async function convertSlide(filename) {
     try {
         appendToConsole(`Starting conversion of ${filename}...\n`, 'info');
-        const response = await fetch(`http://localhost:3101/api/convert/${encodeURIComponent(filename)}`, { method: 'POST' });
+        
+        // Send convert request directly to backend server instead of using GUI-server proxy
+        const backendUrl = `http://localhost:3102/api/touch-file/${encodeURIComponent(filename)}`;
+        const response = await fetch(backendUrl, { method: 'POST' });
+        
         if (!response.ok) {
             const txt = await response.text();
-            appendToConsole(`Failed to start conversion: ${txt}\n`, 'error');
+            appendToConsole(`Failed to trigger conversion: ${txt}\n`, 'error');
             return;
         }
         const result = await response.json();
-        appendToConsole(`Conversion request accepted: ${result.status || 'processing'}\n`, 'info');
+        appendToConsole(`File touched, autoprocessor will detect and convert: ${result.status || 'triggered'}\n`, 'info');
         
         // Update button states and show progress
         const safeFilename = filename.replace(/[^a-zA-Z0-9]/g, '_');
@@ -1243,7 +1253,11 @@ async function convertSlide(filename) {
 async function cancelConversion(filename) {
     try {
         appendToConsole(`Cancelling conversion of ${filename}...\n`, 'info');
-        const response = await fetch(`http://localhost:3101/api/convert/${encodeURIComponent(filename)}/cancel`, { method: 'POST' });
+        
+        // Send cancel request directly to backend server instead of using GUI-server proxy
+        const backendUrl = `http://localhost:3102/api/cancel-conversion/${encodeURIComponent(filename)}`;
+        const response = await fetch(backendUrl, { method: 'POST' });
+        
         if (!response.ok) {
             const txt = await response.text();
             appendToConsole(`Failed to cancel conversion: ${txt}\n`, 'error');
@@ -1291,7 +1305,9 @@ async function deleteSlide(filename) {
     try {
         appendToConsole(`Deleting slide: ${filename}...\n`, 'info');
         
-        const response = await fetch(`/api/slides/${encodeURIComponent(filename)}`, {
+        // Send delete request directly to backend server instead of using GUI-server proxy
+        const backendUrl = `http://localhost:3102/api/slides/${encodeURIComponent(filename)}`;
+        const response = await fetch(backendUrl, {
             method: 'DELETE'
         });
         

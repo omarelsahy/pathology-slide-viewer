@@ -105,11 +105,15 @@ class OptimizedAutoProcessor extends EventEmitter {
     const fileName = path.basename(filePath);
     const fileExt = path.extname(fileName).toLowerCase();
     
+    console.log(`[DEBUG] handleFileAdded called for: ${fileName}`);
+    
     if (!this.supportedFormats.includes(fileExt)) {
+      console.log(`[DEBUG] Skipping ${fileName} - unsupported format: ${fileExt}`);
       return;
     }
 
     if (this.processedFiles.has(filePath)) {
+      console.log(`[DEBUG] Skipping ${fileName} - already in processedFiles`);
       return;
     }
 
@@ -119,10 +123,21 @@ class OptimizedAutoProcessor extends EventEmitter {
     const uniqueName = relativePath && relativePath !== '.' ? 
       `${relativePath.replace(/[\\\/]/g, '_')}_${baseName}` : baseName;
     
-    // Check if DZI already exists
-    const dziPath = path.join(path.dirname(this.slidesDir), 'dzi', `${uniqueName}.dzi`);
-    if (fs.existsSync(dziPath)) {
-      console.log(`Skipping ${fileName} - DZI already exists`);
+    console.log(`[DEBUG] Generated unique name: ${uniqueName} for ${fileName}`);
+    
+    // Check if DZI already exists (organized structure first, then legacy)
+    const dziDir = path.join(path.dirname(this.slidesDir), 'dzi');
+    const organizedDziPath = path.join(dziDir, uniqueName, `${uniqueName}.dzi`);
+    const legacyDziPath = path.join(dziDir, `${uniqueName}.dzi`);
+    
+    if (fs.existsSync(organizedDziPath)) {
+      console.log(`[DEBUG] Skipping ${fileName} - DZI already exists in organized structure: ${organizedDziPath}`);
+      this.processedFiles.add(filePath);
+      return;
+    }
+    
+    if (fs.existsSync(legacyDziPath)) {
+      console.log(`[DEBUG] Skipping ${fileName} - DZI already exists in legacy structure: ${legacyDziPath}`);
       this.processedFiles.add(filePath);
       return;
     }
@@ -130,12 +145,14 @@ class OptimizedAutoProcessor extends EventEmitter {
     // Check if already being processed
     try {
       const status = await this.conversionClient.getConversionStatus(uniqueName);
+      console.log(`[DEBUG] Conversion status for ${uniqueName}: ${JSON.stringify(status)}`);
       if (status.status === 'processing' || status.status === 'queued' || status.status === 'completed') {
-        console.log(`Skipping ${fileName} - already ${status.status}`);
+        console.log(`[DEBUG] Skipping ${fileName} - already ${status.status}`);
         this.processedFiles.add(filePath);
         return;
       }
     } catch (error) {
+      console.log(`[DEBUG] Status check failed for ${uniqueName}: ${error.message}`);
       // Status check failed, continue with processing
     }
 
@@ -177,18 +194,21 @@ class OptimizedAutoProcessor extends EventEmitter {
     try {
       const dziDir = path.join(path.dirname(this.slidesDir), 'dzi');
       
-      // Ensure DZI directory exists
-      if (!fs.existsSync(dziDir)) {
-        fs.mkdirSync(dziDir, { recursive: true });
+      // Use organized structure: create slide-specific directory
+      const organizedSlideDir = path.join(dziDir, baseName);
+      
+      // Ensure organized slide directory exists
+      if (!fs.existsSync(organizedSlideDir)) {
+        fs.mkdirSync(organizedSlideDir, { recursive: true });
       }
 
-      console.log(`Starting optimized conversion for: ${baseName}`);
+      console.log(`Starting optimized conversion for: ${baseName} → ${organizedSlideDir}`);
       
       const result = await this.conversionClient.startConversion(
         filePath,
         baseName,
         this.slidesDir,
-        dziDir
+        organizedSlideDir  // Use organized directory instead of root DZI dir
       );
       
       console.log(`Conversion queued: ${baseName} (position: ${result.queuePosition})`);
@@ -302,6 +322,20 @@ class OptimizedAutoProcessor extends EventEmitter {
     if (this.conversionClient) {
       this.conversionClient.stopAllPolling();
     }
+  }
+
+  // Method to manually trigger file processing (for touch conversions)
+  async triggerFileProcessing(filePath) {
+    console.log(`[DEBUG] Manual trigger requested for: ${filePath}`);
+    
+    if (!fs.existsSync(filePath)) {
+      console.log(`[DEBUG] File not found: ${filePath}`);
+      return false;
+    }
+    
+    // Force re-evaluation by calling handleFileAdded directly
+    await this.handleFileAdded(filePath);
+    return true;
   }
 }
 

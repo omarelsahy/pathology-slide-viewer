@@ -489,6 +489,72 @@ function extractVipsVersion(helpOutput) {
   return match ? match[1] : 'Unknown';
 }
 
+// Touch file endpoint to trigger autoprocessor
+app.post('/api/touch-file/:filename', async (req, res) => {
+  try {
+    const filename = decodeURIComponent(req.params.filename);
+    const filePath = path.join(guiConfig.sourceDir, filename);
+    
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'File not found', filename });
+    }
+    
+    // Update file modification time to trigger autoprocessor
+    const now = new Date();
+    fs.utimesSync(filePath, now, now);
+    
+    // Notify backend to clear processed status for this file
+    try {
+      const backendUrl = `http://localhost:${guiConfig.serverPort || 3102}`;
+      await fetch(`${backendUrl}/api/clear-processed/${encodeURIComponent(filename)}`, { 
+        method: 'POST' 
+      });
+    } catch (backendError) {
+      console.warn('Could not notify backend to clear processed status:', backendError.message);
+    }
+    
+    res.json({ 
+      success: true, 
+      status: 'triggered',
+      filename,
+      message: 'File touched, autoprocessor will detect and process'
+    });
+    
+  } catch (error) {
+    console.error('Touch file error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Cancel conversion endpoint
+app.post('/api/cancel-conversion/:filename', async (req, res) => {
+  try {
+    const filename = decodeURIComponent(req.params.filename);
+    
+    // Forward cancel request to backend server
+    const backendUrl = `http://localhost:${guiConfig.serverPort || 3102}`;
+    const response = await fetch(`${backendUrl}/api/cancel-conversion/${encodeURIComponent(filename)}`, { 
+      method: 'POST' 
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      return res.status(response.status).json({ error: errorText });
+    }
+    
+    const result = await response.json();
+    res.json(result);
+    
+  } catch (error) {
+    console.error('Cancel conversion proxy error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Load config on startup
+loadConfig();
+
 // WebSocket server for real-time updates
 const server = app.listen(PORT, () => {
   console.log(`\n=== PATHOLOGY SLIDE VIEWER GUI ===`);
@@ -574,9 +640,6 @@ function broadcastToClients(message) {
     }
   });
 }
-
-// Load config on startup
-loadConfig();
 
 // Graceful shutdown
 process.on('SIGINT', () => {

@@ -123,7 +123,7 @@ class ConversionWorker {
       await this.waitForFileAccess();
       
       const tempDir = require('os').tmpdir();
-      const tempPath = path.join(tempDir, `${this.baseName}_icc_temp.v`);
+      const tempPath = path.join(tempDir, `${this.baseName}_icc_temp.tif`);
   
       await this.applyICCTransform(this.svsPath, tempPath, this.vipsEnv);
       await this.convertToDZI(tempPath, this.outputPath, this.vipsEnv, this.baseName);
@@ -209,7 +209,7 @@ class ConversionWorker {
       const proc = spawn('vips', [
         'icc_transform',
         inputPath,
-        outputPath,
+        outputPath + '[compression=jpeg,Q=95,strip]',
         chosenProfile,
         `--vips-concurrency=${perWorkerConcurrency}`,
         '--vips-progress'
