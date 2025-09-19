@@ -151,12 +151,12 @@ app.post('/api/config', (req, res) => {
 
 // Proxy helpers to backend API
 function getBackendBaseUrl() {
-  const port = Number(guiConfig.serverPort) || 3101;
+  const port = Number(guiConfig.serverPort) || 3102; // Updated default to match current backend port
   return `http://localhost:${port}`;
 }
 
 function getBackendWsUrl() {
-  const port = Number(guiConfig.serverPort) || 3101;
+  const port = Number(guiConfig.serverPort) || 3102; // Updated default to match current backend port
   return `ws://localhost:${port}`;
 }
 
@@ -570,13 +570,13 @@ const server = app.listen(PORT, () => {
   // Start the backend WS bridge when server starts
   ensureBackendWs();
 
-  // Ensure backend WS is running every 5 seconds
+  // Ensure backend WS is running every 3 seconds (more frequent checks)
   setInterval(() => {
     if (!backendWs || backendWs.readyState !== WebSocket.OPEN) {
       console.log('Backend WS not connected, attempting to reconnect...');
       ensureBackendWs();
     }
-  }, 5000);
+  }, 3000);
 });
 
 const wss = new WebSocket.Server({ server });
@@ -620,13 +620,15 @@ function ensureBackendWs() {
         console.log('Failed to parse backend WS message:', e.message, msg.toString().substring(0, 100));
       }
     });
-    backendWs.on('close', () => {
-      console.log('Backend WS closed, will retry...');
+    backendWs.on('close', (code, reason) => {
+      console.log(`Backend WS closed (code: ${code}, reason: ${reason}), will retry in 2s...`);
+      backendWs = null; // Clear reference to allow new connection
       setTimeout(ensureBackendWs, 2000);
     });
     backendWs.on('error', (err) => {
-      console.log('Backend WS error:', err.message);
+      console.log('Backend WS error:', err.message, '- URL:', url);
       try { backendWs.close(); } catch (_) {}
+      backendWs = null; // Clear reference to allow new connection
     });
   } catch (e) { 
     console.log('Failed to create backend WS connection:', e.message);

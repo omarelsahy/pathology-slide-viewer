@@ -284,7 +284,7 @@ class ConversionServer extends EventEmitter {
       const args = [
         'icc_transform',
         inputPath,
-        `${tempPath}[compression=lzw,Q=95]`, // Use LZW compression with high quality
+        `${tempPath}[compression=lzw,Q=95,bigtiff=true]`, // Use LZW compression with BigTIFF for >4GB files
         sRgbProfile,
         '--embedded=true',
         `--vips-concurrency=${optimalConcurrency}`,
