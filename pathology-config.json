@@ -1,0 +1,54 @@
+{
+  "deployment": {
+    "mode": "distributed",
+    "mainServer": {
+      "port": 3102,
+      "host": "0.0.0.0"
+    }
+  },
+  "storage": {
+    "slidesDir": "C:\\OG",
+    "dziDir": "C:\\dzi",
+    "tempDir": "C:\\temp"
+  },
+  "conversion": {
+    "defaultConcurrency": 8,
+    "pollInterval": 1000,
+    "timeout": 30000,
+    "vips": {
+      "concurrency": 32,
+      "cacheMemoryGB": 64,
+      "cacheMaxFiles": 1000,
+      "quality": 95,
+      "compression": "lzw",
+      "bigtiff": true,
+      "vector": true,
+      "warning": false
+    }
+  },
+  "conversionServers": {
+    "autoDiscovery": true,
+    "healthCheckInterval": 10000,
+    "registrationTimeout": 30000,
+    "servers": [
+      {
+        "id": "local",
+        "host": "localhost",
+        "port": 3001,
+        "autoStart": true,
+        "maxConcurrent": 8
+      }
+    ]
+  },
+  "autoProcessor": {
+    "enabled": true,
+    "supportedFormats": [".svs", ".ndpi", ".tif", ".tiff", ".jp2", ".vms", ".vmu", ".scn"],
+    "fileStabilityThreshold": 2000,
+    "retryDelay": 3000
+  },
+  "gui": {
+    "port": 3003,
+    "reconnectInterval": 3000,
+    "updateInterval": 1000
+  }
+}

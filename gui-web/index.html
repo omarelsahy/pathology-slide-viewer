@@ -21,7 +21,7 @@
 
         .container {
             display: grid;
-            grid-template-columns: 350px 1fr;
+            grid-template-columns: 400px 1fr;
             grid-template-rows: 60px 1fr;
             height: 100vh;
         }
@@ -82,6 +82,238 @@
             background: #252526;
             border-right: 1px solid #3e3e42;
             overflow-y: auto;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            min-height: 0; /* Ensure proper flex behavior */
+            width: 400px; /* Increase width for more content */
+        }
+
+        .config-tabs {
+            display: flex;
+            background: #2d2d30;
+            border-bottom: 1px solid #3e3e42;
+            min-height: 40px; /* Ensure tabs are visible */
+            flex-shrink: 0; /* Prevent shrinking */
+        }
+
+        .tab-btn {
+            flex: 1;
+            padding: 12px 8px;
+            background: transparent;
+            border: none;
+            color: #cccccc;
+            font-size: 11px;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+            /* Debug: Make tabs more visible */
+            border-left: 1px solid #5a5a5a;
+        }
+        
+        .tab-btn:first-child {
+            border-left: none;
+        }
+
+        .tab-btn:hover {
+            background: #3e3e42;
+            color: #ffffff;
+        }
+
+        .tab-btn.active {
+            color: #ffffff;
+            border-bottom-color: #007acc;
+            background: #37373d;
+        }
+
+        .tab-content {
+            flex: 1;
+            overflow-y: auto;
+            min-height: 0; /* Ensure proper scrolling */
+        }
+
+        .tab-panel {
+            display: none;
+        }
+
+        .tab-panel.active {
+            display: block;
+        }
+
+        .server-item {
+            background: #2d2d30;
+            border: 1px solid #3e3e42;
+            border-radius: 4px;
+            margin: 10px 20px;
+            padding: 15px;
+        }
+
+        .server-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .server-name {
+            font-weight: 600;
+            font-size: 13px;
+        }
+
+        .server-address {
+            font-size: 11px;
+            color: #cccccc;
+        }
+
+        .server-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 5px;
+        }
+
+        .status-badge {
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+
+        .status-badge.online {
+            background: #28a745;
+            color: white;
+        }
+
+        .status-badge.offline {
+            background: #dc3545;
+            color: white;
+        }
+
+        .status-badge.connecting {
+            background: #ffc107;
+            color: black;
+        }
+
+        .load-bar {
+            flex: 1;
+            height: 6px;
+            background: #3e3e42;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .load-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #28a745, #ffc107, #dc3545);
+            transition: width 0.3s;
+        }
+
+        .load-info {
+            font-size: 10px;
+            color: #cccccc;
+            min-width: 50px;
+            text-align: right;
+        }
+
+        .server-controls {
+            display: flex;
+            gap: 5px;
+            margin-top: 10px;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin: 20px;
+        }
+
+        .metric-card {
+            background: #2d2d30;
+            border: 1px solid #3e3e42;
+            border-radius: 4px;
+            padding: 15px;
+            text-align: center;
+        }
+
+        .metric-value {
+            font-size: 24px;
+            font-weight: 600;
+            color: #007acc;
+        }
+
+        .metric-label {
+            font-size: 11px;
+            color: #cccccc;
+            margin-top: 5px;
+        }
+
+        .add-server-form {
+            background: #2d2d30;
+            border: 1px solid #3e3e42;
+            border-radius: 4px;
+            margin: 20px;
+            padding: 15px;
+            display: none;
+        }
+
+        .add-server-form.active {
+            display: block;
+        }
+
+        .form-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .form-row .form-control {
+            flex: 1;
+        }
+
+        .config-section {
+            margin-bottom: 20px;
+        }
+
+        .config-section-header {
+            display: flex;
+            justify-content: between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .config-actions {
+            display: flex;
+            gap: 10px;
+            margin: 20px;
+        }
+
+        .validation-errors {
+            background: #dc3545;
+            color: white;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 20px;
+            font-size: 11px;
+            display: none;
+        }
+
+        .validation-errors.show {
+            display: block;
+        }
+
+        .success-message {
+            background: #28a745;
+            color: white;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 20px;
+            font-size: 11px;
+            display: none;
+        }
+
+        .success-message.show {
+            display: block;
         }
 
         .main-content {
@@ -226,31 +458,6 @@
             white-space: nowrap;
         }
 
-        .tabs {
-            display: flex;
-            background: #2d2d30;
-            border-bottom: 1px solid #3e3e42;
-        }
-
-        .tab {
-            padding: 12px 20px;
-            cursor: pointer;
-            border-bottom: 2px solid transparent;
-            font-size: 13px;
-        }
-
-        .tab.active {
-            background: #1e1e1e;
-            border-bottom-color: #007acc;
-        }
-
-        .tab-content {
-            display: none;
-        }
-
-        .tab-content.active {
-            display: block;
-        }
 
         .checkbox-group {
             display: flex;
@@ -387,95 +594,239 @@
         </div>
 
         <div class="sidebar">
-            <div class="section">
-                <div class="section-title">Folders</div>
-                <div class="form-group">
-                    <label>Source Folder (.svs, .ndpi files)</label>
-                    <div class="folder-selector">
-                        <div class="folder-path" id="sourcePath">Select folder...</div>
-                        <button class="btn btn-small" id="selectSourceBtn">Browse</button>
-                    </div>
-                </div>
-                <div class="form-group">
-                    <label>Destination Folder (DZI output)</label>
-                    <div class="folder-selector">
-                        <div class="folder-path" id="destPath">Select folder...</div>
-                        <button class="btn btn-small" id="selectDestBtn">Browse</button>
-                    </div>
-                </div>
+            <!-- Configuration Tabs -->
+            <div class="config-tabs">
+                <button class="tab-btn active" data-tab="system">🏠 System</button>
+                <button class="tab-btn" data-tab="vips">⚙️ VIPS</button>
+                <button class="tab-btn" data-tab="servers">🖥️ Servers</button>
             </div>
 
-            <div class="section">
-                <div class="section-title">VIPS Configuration</div>
-                <div class="form-group">
-                    <label>Concurrency (Threads)</label>
-                    <input type="number" class="form-control" id="concurrency" min="1" max="64" value="8">
-                </div>
-                <div class="form-group">
-                    <label>Max Memory (MB)</label>
-                    <input type="number" class="form-control" id="maxMemory" min="512" max="32768" value="4096">
-                </div>
-                <div class="form-group">
-                    <label>Buffer Size (MB)</label>
-                    <input type="number" class="form-control" id="bufferSize" min="64" max="2048" value="512">
-                </div>
-                <div class="form-group">
-                    <label>Tile Size</label>
-                    <select class="form-control" id="tileSize">
-                        <option value="128">128</option>
-                        <option value="256" selected>256</option>
-                        <option value="512">512</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Quality</label>
-                    <input type="range" class="form-control" id="quality" min="60" max="100" value="90">
-                    <span id="qualityValue">90</span>
-                </div>
-            </div>
+            <!-- Tab Content -->
+            <div class="tab-content">
+                <!-- System Configuration Tab -->
+                <div class="tab-panel active" id="system-tab">
+                    <div class="validation-errors" id="validationErrors"></div>
+                    <div class="success-message" id="successMessage"></div>
+                    
+                    <div class="section">
+                        <div class="section-title">Deployment Mode</div>
+                        <div class="form-group">
+                            <label>Mode</label>
+                            <select class="form-control" id="deploymentMode">
+                                <option value="single">Single Server</option>
+                                <option value="distributed">Distributed</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Main Server Port</label>
+                            <input type="number" class="form-control" id="mainServerPort" min="1000" max="65535" value="3102">
+                        </div>
+                        <div class="form-group">
+                            <label>GUI Server Port</label>
+                            <input type="number" class="form-control" id="serverPort" min="1000" max="65535" value="3000">
+                        </div>
+                    </div>
 
-            <div class="section">
-                <div class="section-title">ICC Profile</div>
-                <div class="form-group">
-                    <div class="checkbox-group">
-                        <input type="checkbox" id="autoDetectSrgb" checked>
-                        <label for="autoDetectSrgb">Auto-detect sRGB</label>
+                    <div class="section">
+                        <div class="section-title">Storage Configuration</div>
+                        <div class="form-group">
+                            <label>Slides Directory</label>
+                            <div class="folder-selector">
+                                <div class="folder-path" id="slidesDir">C:\OG</div>
+                                <button class="btn btn-small" id="selectSlidesBtn">Browse</button>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>DZI Output Directory</label>
+                            <div class="folder-selector">
+                                <div class="folder-path" id="dziDir">C:\dzi</div>
+                                <button class="btn btn-small" id="selectDziBtn">Browse</button>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Temporary Directory</label>
+                            <div class="folder-selector">
+                                <div class="folder-path" id="tempDir">C:\temp</div>
+                                <button class="btn btn-small" id="selectTempBtn">Browse</button>
+                            </div>
+                        </div>
                     </div>
-                </div>
-                <div class="form-group">
-                    <label>Color Transform</label>
-                    <select class="form-control" id="colorTransform">
-                        <option value="auto" selected>Auto (size-based)</option>
-                        <option value="always">Always transform</option>
-                        <option value="never">Never transform</option>
-                    </select>
-                </div>
-            </div>
 
-            <div class="section">
-                <div class="section-title">VIPS Logging</div>
-                <div class="form-group">
-                    <div class="checkbox-group">
-                        <input type="checkbox" id="vipsProgress" checked>
-                        <label for="vipsProgress">Progress</label>
+                    <div class="section">
+                        <div class="section-title">Auto-Processor Settings</div>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="autoProcessorEnabled" checked>
+                            <label for="autoProcessorEnabled">Enable Auto-Processing</label>
+                        </div>
+                        <div class="form-group">
+                            <label>File Stability Threshold (ms)</label>
+                            <input type="number" class="form-control" id="fileStabilityThreshold" min="1000" max="10000" value="2000">
+                        </div>
+                        <div class="form-group">
+                            <label>Retry Delay (ms)</label>
+                            <input type="number" class="form-control" id="retryDelay" min="1000" max="10000" value="3000">
+                        </div>
                     </div>
-                    <div class="checkbox-group">
-                        <input type="checkbox" id="vipsInfo" checked>
-                        <label for="vipsInfo">Info</label>
-                    </div>
-                    <div class="checkbox-group">
-                        <input type="checkbox" id="vipsWarning" checked>
-                        <label for="vipsWarning">Warnings</label>
+
+                    <div class="config-actions">
+                        <button class="btn btn-success" id="saveConfigBtn">💾 Save Configuration</button>
+                        <button class="btn btn-warning" id="reloadConfigBtn">🔄 Reload</button>
+                        <button class="btn" id="validateConfigBtn">✅ Validate</button>
                     </div>
                 </div>
-            </div>
 
-            <div class="section">
-                <div class="section-title">Conversion Options</div>
-                <div class="form-group">
-                    <div class="checkbox-group">
-                        <input type="checkbox" id="autoDeleteOriginal">
-                        <label for="autoDeleteOriginal">Auto-delete original SVS after successful conversion</label>
+                <!-- VIPS Configuration Tab -->
+                <div class="tab-panel" id="vips-tab">
+                    <div class="section">
+                        <div class="section-title">Performance Settings</div>
+                        <div class="form-group">
+                            <label>Concurrency (Threads)</label>
+                            <input type="number" class="form-control" id="vipsConcurrency" min="1" max="128" value="32">
+                        </div>
+                        <div class="form-group">
+                            <label>Cache Memory (GB)</label>
+                            <input type="number" class="form-control" id="vipsCacheMemory" min="1" max="128" value="64">
+                        </div>
+                        <div class="form-group">
+                            <label>Cache Max Files</label>
+                            <input type="number" class="form-control" id="vipsCacheMaxFiles" min="100" max="10000" value="1000">
+                        </div>
+                        <div class="form-group">
+                            <label>Default Concurrency</label>
+                            <input type="number" class="form-control" id="defaultConcurrency" min="1" max="64" value="8">
+                        </div>
+                    </div>
+
+                    <div class="section">
+                        <div class="section-title">Quality Settings</div>
+                        <div class="form-group">
+                            <label>JPEG Quality: <span id="vipsQualityValue">95</span></label>
+                            <input type="range" class="form-control" id="vipsQuality" min="1" max="100" value="95">
+                        </div>
+                        <div class="form-group">
+                            <label>Compression</label>
+                            <select class="form-control" id="vipsCompression">
+                                <option value="lzw">LZW</option>
+                                <option value="jpeg">JPEG</option>
+                                <option value="deflate">Deflate</option>
+                                <option value="none">None</option>
+                            </select>
+                        </div>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="vipsBigtiff" checked>
+                            <label for="vipsBigtiff">Enable BigTIFF</label>
+                        </div>
+                    </div>
+
+                    <div class="section">
+                        <div class="section-title">Advanced Options</div>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="vipsVector" checked>
+                            <label for="vipsVector">Enable SIMD Vector Operations</label>
+                        </div>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="vipsWarning">
+                            <label for="vipsWarning">Show VIPS Warnings</label>
+                        </div>
+                        <div class="form-group">
+                            <label>Timeout (ms)</label>
+                            <input type="number" class="form-control" id="conversionTimeout" min="10000" max="300000" value="30000">
+                        </div>
+                        <div class="form-group">
+                            <label>Poll Interval (ms)</label>
+                            <input type="number" class="form-control" id="pollInterval" min="500" max="5000" value="1000">
+                        </div>
+                    </div>
+
+                    <div class="section">
+                        <div class="section-title">DZI Generation Settings</div>
+                        <div class="form-group">
+                            <label>Overlap</label>
+                            <input type="number" class="form-control" id="overlap" min="0" max="5" value="1">
+                        </div>
+                        <div class="form-group">
+                            <label>Layout</label>
+                            <select class="form-control" id="layout">
+                                <option value="dz" selected>Deep Zoom</option>
+                                <option value="zoomify">Zoomify</option>
+                                <option value="google">Google Maps</option>
+                            </select>
+                        </div>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="embedIcc">
+                            <label for="embedIcc">Embed ICC in tiles</label>
+                        </div>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="sequential" checked>
+                            <label for="sequential">Sequential access</label>
+                        </div>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="novector">
+                            <label for="novector">Disable vectorization</label>
+                        </div>
+                    </div>
+
+                    <div class="section">
+                        <div class="section-title">VIPS Information</div>
+                        <div class="form-group">
+                            <button class="btn" id="getVipsInfoBtn">Get VIPS Info</button>
+                            <div class="vips-info" id="vipsInfoDisplay">
+                                Click "Get VIPS Info" to display VIPS configuration and available options.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Server Management Tab -->
+                <div class="tab-panel" id="servers-tab">
+                    <!-- Metrics Dashboard -->
+                    <div class="metrics-grid">
+                        <div class="metric-card">
+                            <div class="metric-value" id="totalServersMetric">0</div>
+                            <div class="metric-label">Total Servers</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value" id="totalCapacityMetric">0</div>
+                            <div class="metric-label">Total Capacity</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-value" id="activeConversionsMetric">0</div>
+                            <div class="metric-label">Active Conversions</div>
+                        </div>
+                    </div>
+
+                    <!-- Server List -->
+                    <div class="section">
+                        <div class="section-title">Conversion Servers</div>
+                        <div id="serversList">
+                            <!-- Server items will be populated here -->
+                        </div>
+                    </div>
+
+                    <!-- Add Server Form -->
+                    <div class="add-server-form" id="addServerForm">
+                        <div class="section-title">Add Conversion Server</div>
+                        <div class="form-row">
+                            <input type="text" class="form-control" id="newServerHost" placeholder="Host (e.g., localhost)">
+                            <input type="number" class="form-control" id="newServerPort" placeholder="Port" min="1000" max="65535" value="3001">
+                        </div>
+                        <div class="form-row">
+                            <input type="number" class="form-control" id="newServerConcurrency" placeholder="Max Concurrent" min="1" max="64" value="8">
+                            <div class="checkbox-group">
+                                <input type="checkbox" id="newServerAutoStart">
+                                <label for="newServerAutoStart">Auto Start</label>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <button class="btn btn-success" id="addServerBtn">Add Server</button>
+                            <button class="btn" id="cancelAddServerBtn">Cancel</button>
+                        </div>
+                    </div>
+
+                    <!-- Add Server Button -->
+                    <div class="config-actions">
+                        <button class="btn btn-success" id="showAddServerBtn">+ Add Conversion Server</button>
+                        <button class="btn" id="refreshServersBtn">🔄 Refresh</button>
                     </div>
                 </div>
             </div>
@@ -483,11 +834,6 @@
 
         <div class="main-content">
             <div class="content-area">
-                <div class="tabs">
-                    <div class="tab active" data-tab="slides">Slides</div>
-                    <div class="tab" data-tab="vips-info">VIPS Info</div>
-                    <div class="tab" data-tab="settings">Advanced Settings</div>
-                </div>
 
                 <!-- Conversion Progress Panel -->
                 <div id="progressPanel" style="display:none; margin: 15px 20px; padding: 12px; background:#2d2d30; border:1px solid #3e3e42; border-radius:6px;">
@@ -501,68 +847,14 @@
                     </div>
                 </div>
 
-                <div class="tab-content active" id="slides-tab">
-                    <div style="margin-bottom: 20px; display:flex; gap:10px; align-items:center;">
-                        <button class="btn" id="scanSlidesBtn">Scan for Slides</button>
-                        <button class="btn" id="refreshSlidesBtn">Refresh</button>
-                        <button class="btn" id="importSlidesBtn">Import Slides</button>
-                        <input type="file" id="importSlidesInput" accept=".svs,.ndpi,.tif,.tiff,.jp2,.vms,.vmu,.scn" multiple style="display:none;" />
-                    </div>
-                    <div class="slides-grid" id="slidesGrid">
-                        <!-- Slides will be populated here -->
-                    </div>
+                <div style="margin-bottom: 20px; display:flex; gap:10px; align-items:center;">
+                    <button class="btn" id="scanSlidesBtn">Scan for Slides</button>
+                    <button class="btn" id="refreshSlidesBtn">Refresh</button>
+                    <button class="btn" id="importSlidesBtn">Import Slides</button>
+                    <input type="file" id="importSlidesInput" accept=".svs,.ndpi,.tif,.tiff,.jp2,.vms,.vmu,.scn" multiple style="display:none;" />
                 </div>
-
-                <div class="tab-content" id="vips-info-tab">
-                    <div style="margin-bottom: 20px;">
-                        <button class="btn" id="getVipsInfoBtn">Get VIPS Info</button>
-                    </div>
-                    <div class="vips-info" id="vipsInfoDisplay">
-                        Click "Get VIPS Info" to display VIPS configuration and available options.
-                    </div>
-                </div>
-
-                <div class="tab-content" id="settings-tab">
-                    <div class="row">
-                        <div class="col">
-                            <div class="form-group">
-                                <label>Server Port</label>
-                                <input type="number" class="form-control" id="serverPort" min="1000" max="65535" value="3000">
-                            </div>
-                            <div class="form-group">
-                                <label>Overlap</label>
-                                <input type="number" class="form-control" id="overlap" min="0" max="5" value="1">
-                            </div>
-                            <div class="form-group">
-                                <label>Layout</label>
-                                <select class="form-control" id="layout">
-                                    <option value="dz" selected>Deep Zoom</option>
-                                    <option value="zoomify">Zoomify</option>
-                                    <option value="google">Google Maps</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div class="col">
-                            <div class="form-group">
-                                <div class="checkbox-group">
-                                    <input type="checkbox" id="embedIcc">
-                                    <label for="embedIcc">Embed ICC in tiles</label>
-                                </div>
-                            </div>
-                            <div class="form-group">
-                                <div class="checkbox-group">
-                                    <input type="checkbox" id="sequential" checked>
-                                    <label for="sequential">Sequential access</label>
-                                </div>
-                            </div>
-                            <div class="form-group">
-                                <div class="checkbox-group">
-                                    <input type="checkbox" id="novector">
-                                    <label for="novector">Disable vectorization</label>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+                <div class="slides-grid" id="slidesGrid">
+                    <!-- Slides will be populated here -->
                 </div>
             </div>
 

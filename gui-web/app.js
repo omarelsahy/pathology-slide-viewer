@@ -6,72 +6,134 @@ let slides = [];
 let ws = null;
 let backendHealthy = false;
 
-// DOM Elements
-const elements = {
-    // Server controls
-    guiIndicator: document.getElementById('guiIndicator'),
-    backendIndicator: document.getElementById('backendIndicator'),
-    conversionIndicator: document.getElementById('conversionIndicator'),
-    guiUrl: document.getElementById('guiUrl'),
-    backendUrl: document.getElementById('backendUrl'),
-    conversionUrl: document.getElementById('conversionUrl'),
-    startServerBtn: document.getElementById('startServerBtn'),
-    stopServerBtn: document.getElementById('stopServerBtn'),
+// DOM Elements - will be initialized after DOM loads
+let elements = {};
+
+// Initialize DOM elements after DOM is loaded
+function initializeElements() {
+    console.log('🎯 Initializing DOM elements...');
+    elements = {
+        // Server controls
+        guiIndicator: document.getElementById('guiIndicator'),
+        backendIndicator: document.getElementById('backendIndicator'),
+        conversionIndicator: document.getElementById('conversionIndicator'),
+        guiUrl: document.getElementById('guiUrl'),
+        backendUrl: document.getElementById('backendUrl'),
+        conversionUrl: document.getElementById('conversionUrl'),
+        startServerBtn: document.getElementById('startServerBtn'),
+        stopServerBtn: document.getElementById('stopServerBtn'),
+        
+        // Configuration Tabs
+        tabBtns: document.querySelectorAll('.tab-btn'),
+        tabPanels: document.querySelectorAll('.tab-panel'),
+        
+        // System Configuration
+        deploymentMode: document.getElementById('deploymentMode'),
+        mainServerPort: document.getElementById('mainServerPort'),
+        slidesDir: document.getElementById('slidesDir'),
+        dziDir: document.getElementById('dziDir'),
+        tempDir: document.getElementById('tempDir'),
+        autoProcessorEnabled: document.getElementById('autoProcessorEnabled'),
+        fileStabilityThreshold: document.getElementById('fileStabilityThreshold'),
+        retryDelay: document.getElementById('retryDelay'),
+        
+        // VIPS Configuration
+        vipsConcurrency: document.getElementById('vipsConcurrency'),
+        vipsCacheMemory: document.getElementById('vipsCacheMemory'),
+        vipsCacheMaxFiles: document.getElementById('vipsCacheMaxFiles'),
+        defaultConcurrency: document.getElementById('defaultConcurrency'),
+        vipsQuality: document.getElementById('vipsQuality'),
+        vipsQualityValue: document.getElementById('vipsQualityValue'),
+        vipsCompression: document.getElementById('vipsCompression'),
+        vipsBigtiff: document.getElementById('vipsBigtiff'),
+        vipsVector: document.getElementById('vipsVector'),
+        vipsWarning: document.getElementById('vipsWarning'),
+        conversionTimeout: document.getElementById('conversionTimeout'),
+        pollInterval: document.getElementById('pollInterval'),
+        
+        // Server Management
+        totalServersMetric: document.getElementById('totalServersMetric'),
+        activeServersMetric: document.getElementById('activeServersMetric'),
+        totalConversionsMetric: document.getElementById('totalConversionsMetric'),
+        serversList: document.getElementById('serversList'),
+        addServerBtn: document.getElementById('addServerBtn'),
+        addServerForm: document.getElementById('addServerForm'),
+        cancelAddServerBtn: document.getElementById('cancelAddServerBtn'),
+        refreshServersBtn: document.getElementById('refreshServersBtn'),
+        
+        // Configuration Actions
+        saveConfigBtn: document.getElementById('saveConfigBtn'),
+        reloadConfigBtn: document.getElementById('reloadConfigBtn'),
+        validateConfigBtn: document.getElementById('validateConfigBtn'),
+        
+        // Messages
+        validationErrors: document.getElementById('validationErrors'),
+        successMessage: document.getElementById('successMessage'),
+        
+        // Legacy elements for backward compatibility (removed main tabs)
+        // tabs: document.querySelectorAll('.tab'),
+        // tabContents: document.querySelectorAll('.tab-content'),
+        
+        // Slides
+        scanSlidesBtn: document.getElementById('scanSlidesBtn'),
+        refreshSlidesBtn: document.getElementById('refreshSlidesBtn'),
+        slidesGrid: document.getElementById('slidesGrid'),
+        importSlidesBtn: document.getElementById('importSlidesBtn'),
+        importSlidesInput: document.getElementById('importSlidesInput'),
+        
+        // VIPS Info
+        getVipsInfoBtn: document.getElementById('getVipsInfoBtn'),
+        vipsInfoOutput: document.getElementById('vipsInfoOutput'),
+        
+        // Console
+        consoleOutput: document.getElementById('consoleOutput'),
+        clearConsoleBtn: document.getElementById('clearConsoleBtn'),
+        autoScroll: document.getElementById('autoScroll'),
+        
+        // Additional form elements
+        serverPort: document.getElementById('serverPort'),
+        overlap: document.getElementById('overlap'),
+        layout: document.getElementById('layout'),
+        embedIcc: document.getElementById('embedIcc'),
+        sequential: document.getElementById('sequential'),
+        novector: document.getElementById('novector'),
+        
+        // Legacy configuration elements
+        sourcePath: document.getElementById('sourcePath'),
+        destPath: document.getElementById('destPath'),
+        selectSourceBtn: document.getElementById('selectSourceBtn'),
+        selectDestBtn: document.getElementById('selectDestBtn'),
+        
+        // Legacy VIPS settings
+        concurrency: document.getElementById('concurrency'),
+        maxMemory: document.getElementById('maxMemory'),
+        bufferSize: document.getElementById('bufferSize'),
+        tileSize: document.getElementById('tileSize'),
+        quality: document.getElementById('quality'),
+        qualityValue: document.getElementById('qualityValue'),
+        colorTransform: document.getElementById('colorTransform'),
+        autoDetectSrgb: document.getElementById('autoDetectSrgb'),
+        vipsProgress: document.getElementById('vipsProgress'),
+        vipsInfo: document.getElementById('vipsInfo'),
+        autoDeleteOriginal: document.getElementById('autoDeleteOriginal'),
+        serverPort: document.getElementById('serverPort'),
+        overlap: document.getElementById('overlap'),
+        layout: document.getElementById('layout'),
+        embedIcc: document.getElementById('embedIcc'),
+        sequential: document.getElementById('sequential'),
+        novector: document.getElementById('novector'),
+        
+        // Server status elements
+        serverIndicator: document.getElementById('serverIndicator'),
+        serverStatusText: document.getElementById('serverStatusText')
+    };
     
-    // Folder selection
-    sourcePath: document.getElementById('sourcePath'),
-    destPath: document.getElementById('destPath'),
-    selectSourceBtn: document.getElementById('selectSourceBtn'),
-    selectDestBtn: document.getElementById('selectDestBtn'),
-    
-    // VIPS Configuration
-    concurrency: document.getElementById('concurrency'),
-    maxMemory: document.getElementById('maxMemory'),
-    bufferSize: document.getElementById('bufferSize'),
-    tileSize: document.getElementById('tileSize'),
-    quality: document.getElementById('quality'),
-    qualityValue: document.getElementById('qualityValue'),
-    
-    // ICC Profile
-    autoDetectSrgb: document.getElementById('autoDetectSrgb'),
-    colorTransform: document.getElementById('colorTransform'),
-    
-    // VIPS Logging
-    vipsProgress: document.getElementById('vipsProgress'),
-    vipsInfo: document.getElementById('vipsInfo'),
-    vipsWarning: document.getElementById('vipsWarning'),
-    
-    // Conversion Options
-    autoDeleteOriginal: document.getElementById('autoDeleteOriginal'),
-    
-    // Advanced Settings
-    serverPort: document.getElementById('serverPort'),
-    overlap: document.getElementById('overlap'),
-    layout: document.getElementById('layout'),
-    embedIcc: document.getElementById('embedIcc'),
-    sequential: document.getElementById('sequential'),
-    novector: document.getElementById('novector'),
-    
-    // Tabs and content
-    tabs: document.querySelectorAll('.tab'),
-    tabContents: document.querySelectorAll('.tab-content'),
-    
-    // Slides
-    scanSlidesBtn: document.getElementById('scanSlidesBtn'),
-    refreshSlidesBtn: document.getElementById('refreshSlidesBtn'),
-    slidesGrid: document.getElementById('slidesGrid'),
-    importSlidesBtn: document.getElementById('importSlidesBtn'),
-    importSlidesInput: document.getElementById('importSlidesInput'),
-    
-    // VIPS Info
-    getVipsInfoBtn: document.getElementById('getVipsInfoBtn'),
-    vipsInfoDisplay: document.getElementById('vipsInfoDisplay'),
-    
-    // Console
-    consoleOutput: document.getElementById('consoleOutput'),
-    clearConsoleBtn: document.getElementById('clearConsoleBtn'),
-    autoScroll: document.getElementById('autoScroll')
-};
+    console.log('🎯 DOM elements initialized. slidesGrid found:', !!elements.slidesGrid);
+    console.log('🎯 Configuration tabs found:', {
+        tabBtns: elements.tabBtns ? elements.tabBtns.length : 0,
+        tabPanels: elements.tabPanels ? elements.tabPanels.length : 0
+    });
+}
 
 // Rename slide function
 async function renameSlide(currentName, filename) {
@@ -109,21 +171,80 @@ async function renameSlide(currentName, filename) {
 
 // Initialize the application
 async function init() {
-    await loadConfig();
-    setupEventListeners();
-    setupWebSocket();
-    await updateServerStatus();
-    startBackendHealthPolling();
-    await scanSlides();
+    console.log('🚀 Starting GUI initialization...');
     
-    // Add event listener for rename buttons
-    document.addEventListener('click', function(e) {
-        if (e.target.classList.contains('rename-btn')) {
-            const slideName = e.target.getAttribute('data-slide-name');
-            const filename = e.target.getAttribute('data-filename');
-            renameSlide(slideName, filename);
+    try {
+        console.log('🎯 Initializing DOM elements...');
+        initializeElements();
+        
+        console.log('📋 Loading configuration...');
+        await loadConfig();
+        
+        console.log('🔧 Loading pathology configuration...');
+        await loadPathologyConfig();
+        
+        console.log('🎨 Updating configuration UI...');
+        updateConfigurationUI();
+        
+        console.log('🎛️ Setting up event listeners...');
+        setupEventListeners();
+        
+        console.log('📑 Setting up configuration tabs...');
+        setupConfigurationTabs();
+        
+        console.log('🔌 Setting up WebSocket...');
+        setupWebSocket();
+        
+        console.log('📊 Updating server status...');
+        await updateServerStatus();
+        
+        console.log('🖥️ Refreshing servers list...');
+        await refreshServersList();
+        
+        console.log('💓 Starting backend health polling...');
+        startBackendHealthPolling();
+        
+        console.log('📈 Starting server monitoring...');
+        startServerMonitoring();
+        
+        console.log('🔍 Scanning for slides...');
+        await scanSlides();
+        
+        console.log('✅ GUI initialization completed successfully!');
+        
+        // Add event listener for rename buttons
+        document.addEventListener('click', function(e) {
+            if (e.target.classList.contains('rename-btn')) {
+                const slideName = e.target.getAttribute('data-slide-name');
+                const filename = e.target.getAttribute('data-filename');
+                renameSlide(slideName, filename);
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ GUI initialization failed:', error);
+    }
+}
+
+// Start periodic server monitoring
+function startServerMonitoring() {
+    // Refresh server list every 10 seconds
+    setInterval(async () => {
+        try {
+            await refreshServersList();
+        } catch (error) {
+            console.error('Error during periodic server refresh:', error);
         }
-    });
+    }, 10000);
+    
+    // Update server status every 5 seconds
+    setInterval(async () => {
+        try {
+            await updateServerStatus();
+        } catch (error) {
+            console.error('Error during periodic status update:', error);
+        }
+    }, 5000);
 }
 
 // WebSocket connection
@@ -164,6 +285,28 @@ function handleWebSocketMessage(data) {
             break;
         case 'server-output':
             appendToConsole(data.data, data.stream);
+            break;
+        case 'config_updated':
+            // Configuration was updated, refresh UI
+            pathologyConfig = data.config;
+            updateConfigurationUI();
+            showMessage('Configuration updated from server', 'success');
+            break;
+        case 'config_reloaded':
+            // Configuration was reloaded, refresh UI
+            pathologyConfig = data.config;
+            updateConfigurationUI();
+            showMessage('Configuration reloaded from server', 'success');
+            break;
+        case 'conversion_server_added':
+            // New conversion server was added
+            showMessage(`Conversion server "${data.server.id}" added`, 'success');
+            refreshServersList();
+            break;
+        case 'conversion_server_removed':
+            // Conversion server was removed
+            showMessage(`Conversion server "${data.serverId}" removed`, 'success');
+            refreshServersList();
             break;
         case 'conversion_progress':
             updateProgressPanel(data);
@@ -768,14 +911,46 @@ function forceResetAllCancelButtons() {
     });
 }
 
-// Load configuration from server
+// Load configuration from server (legacy config for compatibility)
 async function loadConfig() {
     try {
-        const response = await fetch('/api/config');
-        currentConfig = await response.json();
-        updateUIFromConfig();
+        // Try to load legacy config first, but don't fail if it doesn't exist
+        const response = await fetch('http://localhost:3102/api/config');
+        if (response.ok) {
+            currentConfig = await response.json();
+            updateUIFromConfig();
+        } else {
+            // Use default config if legacy endpoint doesn't exist
+            currentConfig = {
+                sourceDir: 'C:\\OG',
+                destinationDir: 'C:\\dzi',
+                serverPort: 3102,
+                vipsSettings: {
+                    concurrency: 8,
+                    maxMemoryMB: 4096,
+                    bufferSizeMB: 512,
+                    tileSize: 256,
+                    quality: 90
+                }
+            };
+            updateUIFromConfig();
+        }
     } catch (error) {
         console.error('Failed to load config:', error);
+        // Use default config on error
+        currentConfig = {
+            sourceDir: 'C:\\OG',
+            destinationDir: 'C:\\dzi',
+            serverPort: 3102,
+            vipsSettings: {
+                concurrency: 8,
+                maxMemoryMB: 4096,
+                bufferSizeMB: 512,
+                tileSize: 256,
+                quality: 90
+            }
+        };
+        updateUIFromConfig();
     }
 }
 
@@ -845,7 +1020,7 @@ async function saveConfig() {
     };
     
     try {
-        const response = await fetch('/api/config', {
+        const response = await fetch('http://localhost:3102/api/config', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -863,29 +1038,39 @@ async function saveConfig() {
 
 // Setup event listeners
 function setupEventListeners() {
+    console.log('🎛️ Setting up event listeners...');
+    
     // Server controls
-    elements.startServerBtn.addEventListener('click', startServer);
-    elements.stopServerBtn.addEventListener('click', stopServer);
+    if (elements.startServerBtn) {
+        elements.startServerBtn.addEventListener('click', startServer);
+    }
+    if (elements.stopServerBtn) {
+        elements.stopServerBtn.addEventListener('click', stopServer);
+    }
     
     // Folder selection (simplified for web - just show current paths)
-    elements.selectSourceBtn.addEventListener('click', () => {
-        const newPath = prompt('Enter source folder path:', currentConfig.sourceDir || '');
-        if (newPath) {
-            currentConfig.sourceDir = newPath;
-            elements.sourcePath.textContent = newPath;
-            saveConfig();
-            scanSlides();
-        }
-    });
+    if (elements.selectSourceBtn) {
+        elements.selectSourceBtn.addEventListener('click', () => {
+            const newPath = prompt('Enter source folder path:', currentConfig.sourceDir || '');
+            if (newPath) {
+                currentConfig.sourceDir = newPath;
+                if (elements.sourcePath) elements.sourcePath.textContent = newPath;
+                saveConfig();
+                scanSlides();
+            }
+        });
+    }
     
-    elements.selectDestBtn.addEventListener('click', () => {
-        const newPath = prompt('Enter destination folder path:', currentConfig.destinationDir || '');
-        if (newPath) {
-            currentConfig.destinationDir = newPath;
-            elements.destPath.textContent = newPath;
-            saveConfig();
-        }
-    });
+    if (elements.selectDestBtn) {
+        elements.selectDestBtn.addEventListener('click', () => {
+            const newPath = prompt('Enter destination folder path:', currentConfig.destinationDir || '');
+            if (newPath) {
+                currentConfig.destinationDir = newPath;
+                if (elements.destPath) elements.destPath.textContent = newPath;
+                saveConfig();
+            }
+        });
+    }
     
     // Configuration changes - auto-save
     const configInputs = [
@@ -910,10 +1095,7 @@ function setupEventListeners() {
         });
     }
     
-    // Tab switching
-    elements.tabs.forEach(tab => {
-        tab.addEventListener('click', () => switchTab(tab.dataset.tab));
-    });
+    // Main tab switching removed - now using sidebar configuration tabs only
     
     // Slides management
     if (elements.scanSlidesBtn) elements.scanSlidesBtn.addEventListener('click', scanSlides);
@@ -962,46 +1144,25 @@ async function stopServer() {
     }
 }
 
-async function updateServerStatus() {
-    try {
-        const response = await fetch('/api/server/status');
-        const status = await response.json();
-        updateServerStatusUI(status.running, status.pid);
-    } catch (error) {
-        console.error('Failed to get server status:', error);
-    }
-}
-
-function updateServerStatusUI(running, pid) {
-    if (running) {
-        elements.serverIndicator.classList.add('running');
-        elements.serverStatusText.textContent = `Server Running (PID: ${pid})${backendHealthy ? ' • API OK' : ' • API DOWN'}`;
-        elements.startServerBtn.disabled = true;
-        elements.stopServerBtn.disabled = false;
-    } else {
-        elements.serverIndicator.classList.remove('running');
-        elements.serverStatusText.textContent = 'Server Stopped';
-        elements.startServerBtn.disabled = false;
-        elements.stopServerBtn.disabled = true;
-    }
-}
+// This function is now handled by the second updateServerStatus function below
 
 // Backend health polling
 function startBackendHealthPolling() {
     const poll = async () => {
         try {
-            const res = await fetch('/api/backend/health');
-            const json = await res.json();
-            const ok = json && json.ok === true;
+            const res = await fetch('http://localhost:3102/api/slides');
+            const ok = res.ok;
             if (ok !== backendHealthy) {
                 backendHealthy = ok;
-                updateServerStatus(); // refresh header line with API state
-                appendToConsole(`Backend API ${ok ? 'is reachable' : 'is not reachable'}\n`, ok ? 'info' : 'warning');
+                console.log(`Backend API ${ok ? 'is reachable' : 'is not reachable'}`);
+                if (!ok) {
+                    appendToConsole('Backend API is not reachable\n', 'warning');
+                }
             }
         } catch (e) {
             if (backendHealthy) {
                 backendHealthy = false;
-                updateServerStatus();
+                console.log('Backend API is not reachable');
                 appendToConsole('Backend API is not reachable\n', 'warning');
             }
         } finally {
@@ -1013,45 +1174,60 @@ function startBackendHealthPolling() {
 
 // Slides management
 async function scanSlides() {
+    console.log('🔍 scanSlides() called');
     try {
-        const response = await fetch('/api/slides');
+        console.log('📡 Fetching slides from backend...');
+        const response = await fetch('http://localhost:3102/api/slides');
+        console.log('📡 Response received:', response.status, response.statusText);
         
         if (!response.ok) {
             if (response.status === 502) {
+                console.error('❌ Backend API is not reachable (502)');
                 appendToConsole(`Backend API is not reachable\n`, 'error');
             } else {
+                console.error(`❌ API error: ${response.status} ${response.statusText}`);
                 appendToConsole(`API error: ${response.status} ${response.statusText}\n`, 'error');
             }
             return;
         }
         
         const result = await response.json();
+        console.log('📊 API Response received:', result);
+        console.log('📊 Response type:', typeof result, 'Is array:', Array.isArray(result));
         
-        // Debug: Log the API response to see what data we're getting
-        console.log('API Response:', result);
         if (Array.isArray(result) && result.length > 0) {
-            console.log('First slide data:', result[0]);
+            console.log('📊 First slide data:', result[0]);
         }
         
         // Backend returns an array of slide objects; support both array and {slides: []}
         if (Array.isArray(result)) {
             slides = result;
+            console.log(`✅ Loaded ${slides.length} slides, calling renderSlides()`);
             renderSlides();
         } else if (result && Array.isArray(result.slides)) {
             slides = result.slides;
+            console.log(`✅ Loaded ${slides.length} slides from .slides property, calling renderSlides()`);
             renderSlides();
         } else {
-            console.log('Unexpected response format:', result);
+            console.error('❌ Unexpected response format:', result);
             appendToConsole(`Failed to scan slides: unexpected response format\n`, 'error');
         }
     } catch (error) {
-        console.error('Scan slides error:', error);
+        console.error('❌ Scan slides error:', error);
         appendToConsole(`Error scanning slides: ${error.message}\n`, 'error');
         appendToConsole(`Backend API is not reachable\n`, 'error');
     }
 }
 
 function renderSlides() {
+    console.log('🎨 renderSlides() called with', slides.length, 'slides');
+    console.log('🎨 Checking slidesGrid element:', elements.slidesGrid);
+    
+    if (!elements.slidesGrid) {
+        console.error('❌ slidesGrid element not found!');
+        return;
+    }
+    
     // Store current progress states before clearing
     const currentProgressStates = new Map();
     const currentButtonStates = new Map();
@@ -1336,6 +1512,164 @@ window.cancelConversion = cancelConversion;
 window.viewSlide = viewSlide;
 window.deleteSlide = deleteSlide;
 
+// Debug function to manually test slides loading
+window.debugScanSlides = async function() {
+    console.log('🔍 Manual debug scan slides...');
+    await scanSlides();
+};
+
+// Debug function to test backend connection
+window.debugBackend = async function() {
+    try {
+        const response = await fetch('http://localhost:3102/api/slides');
+        console.log('Backend response:', response.status, response.statusText);
+        if (response.ok) {
+            const data = await response.json();
+            console.log('Slides data:', data.length, 'slides found');
+            console.log('First slide:', data[0]);
+        }
+    } catch (error) {
+        console.error('Backend error:', error);
+    }
+};
+
+// Debug function to test configuration tabs
+window.debugTabs = function() {
+    console.log('🔍 Debugging configuration tabs...');
+    console.log('Tab buttons found:', document.querySelectorAll('.tab-btn').length);
+    console.log('Tab panels found:', document.querySelectorAll('.tab-panel').length);
+    
+    const tabBtns = document.querySelectorAll('.tab-btn');
+    tabBtns.forEach((btn, i) => {
+        console.log(`Tab ${i}:`, btn.getAttribute('data-tab'), btn.textContent);
+    });
+    
+    const tabPanels = document.querySelectorAll('.tab-panel');
+    tabPanels.forEach((panel, i) => {
+        console.log(`Panel ${i}:`, panel.id, panel.classList.contains('active') ? 'ACTIVE' : 'inactive');
+    });
+};
+
+// Debug function to manually switch tabs
+window.debugSwitchTab = function(tabName) {
+    console.log('🔄 Manually switching to tab:', tabName);
+    switchConfigTab(tabName);
+};
+
+// Debug function to check configuration loading
+window.debugConfig = function() {
+    console.log('🔧 Debugging configuration...');
+    console.log('Current config:', currentConfig);
+    console.log('Pathology config:', pathologyConfig);
+    console.log('Sample form elements:');
+    console.log('- deploymentMode element:', elements.deploymentMode);
+    console.log('- deploymentMode value:', elements.deploymentMode?.value);
+    console.log('- slidesDir element:', elements.slidesDir);
+    console.log('- slidesDir textContent:', elements.slidesDir?.textContent);
+    console.log('- vipsConcurrency element:', elements.vipsConcurrency);
+    console.log('- vipsConcurrency value:', elements.vipsConcurrency?.value);
+    
+    // Check if elements exist in DOM
+    console.log('DOM element check:');
+    console.log('- deploymentMode in DOM:', !!document.getElementById('deploymentMode'));
+    console.log('- slidesDir in DOM:', !!document.getElementById('slidesDir'));
+    console.log('- vipsConcurrency in DOM:', !!document.getElementById('vipsConcurrency'));
+};
+
+// Debug function to manually load config
+window.debugLoadConfig = async function() {
+    console.log('📋 Manually loading configuration...');
+    await loadPathologyConfig();
+    updateConfigurationUI();
+    console.log('Configuration loaded and UI updated');
+};
+
+// Debug function to manually set test values
+window.debugSetTestValues = function() {
+    console.log('🧪 Setting test values...');
+    
+    // Test setting values directly
+    const deploymentMode = document.getElementById('deploymentMode');
+    const slidesDir = document.getElementById('slidesDir');
+    const vipsConcurrency = document.getElementById('vipsConcurrency');
+    
+    if (deploymentMode) {
+        deploymentMode.value = 'distributed';
+        console.log('✅ Set deploymentMode to distributed');
+    } else {
+        console.log('❌ deploymentMode element not found');
+    }
+    
+    if (slidesDir) {
+        slidesDir.textContent = 'TEST: C:\\OG';
+        console.log('✅ Set slidesDir text');
+    } else {
+        console.log('❌ slidesDir element not found');
+    }
+    
+    if (vipsConcurrency) {
+        vipsConcurrency.value = '99';
+        console.log('✅ Set vipsConcurrency to 99');
+    } else {
+        console.log('❌ vipsConcurrency element not found');
+    }
+};
+
+// Debug function to check tab visibility
+window.debugTabVisibility = function() {
+    console.log('👁️ Checking tab visibility...');
+    const panels = document.querySelectorAll('.tab-panel');
+    panels.forEach((panel, i) => {
+        const computedStyle = window.getComputedStyle(panel);
+        console.log(`Panel ${i} (${panel.id}):`, {
+            hasActiveClass: panel.classList.contains('active'),
+            display: computedStyle.display,
+            visibility: computedStyle.visibility,
+            height: computedStyle.height,
+            innerHTML: panel.innerHTML.length + ' chars'
+        });
+    });
+};
+
+// Debug function to check sidebar layout
+window.debugLayout = function() {
+    console.log('📐 Checking layout...');
+    const sidebar = document.querySelector('.sidebar');
+    const tabContent = document.querySelector('.tab-content');
+    const systemTab = document.getElementById('system-tab');
+    
+    if (sidebar) {
+        const sidebarStyle = window.getComputedStyle(sidebar);
+        console.log('Sidebar:', {
+            display: sidebarStyle.display,
+            width: sidebarStyle.width,
+            height: sidebarStyle.height,
+            overflow: sidebarStyle.overflow
+        });
+    }
+    
+    if (tabContent) {
+        const tabContentStyle = window.getComputedStyle(tabContent);
+        console.log('Tab Content:', {
+            display: tabContentStyle.display,
+            width: tabContentStyle.width,
+            height: tabContentStyle.height,
+            overflow: tabContentStyle.overflow
+        });
+    }
+    
+    if (systemTab) {
+        const rect = systemTab.getBoundingClientRect();
+        console.log('System Tab Position:', {
+            top: rect.top,
+            left: rect.left,
+            width: rect.width,
+            height: rect.height,
+            visible: rect.width > 0 && rect.height > 0
+        });
+    }
+};
+
 // VIPS Info
 async function getVipsInfo() {
     try {
@@ -1368,18 +1702,7 @@ async function getVipsInfo() {
     }
 }
 
-// Tab management
-function switchTab(tabName) {
-    // Update tab buttons
-    elements.tabs.forEach(tab => {
-        tab.classList.toggle('active', tab.dataset.tab === tabName);
-    });
-    
-    // Update tab content
-    elements.tabContents.forEach(content => {
-        content.classList.toggle('active', content.id === `${tabName}-tab`);
-    });
-}
+// Main tab management removed - now using sidebar configuration tabs only
 
 // Kill hanging VIPS processes
 async function killVipsProcesses() {
@@ -1409,6 +1732,11 @@ async function killVipsProcesses() {
 
 // Console management
 function appendToConsole(text, type = 'stdout') {
+    if (!elements.consoleOutput) {
+        console.log(`[Console] ${text}`);
+        return;
+    }
+    
     const timestamp = new Date().toLocaleTimeString();
     const line = document.createElement('div');
     line.className = `log-${type}`;
@@ -1417,7 +1745,7 @@ function appendToConsole(text, type = 'stdout') {
     elements.consoleOutput.appendChild(line);
     
     // Auto-scroll if enabled
-    if (elements.autoScroll.checked) {
+    if (elements.autoScroll && elements.autoScroll.checked) {
         elements.consoleOutput.scrollTop = elements.consoleOutput.scrollHeight;
     }
     
@@ -1432,8 +1760,10 @@ function appendToConsole(text, type = 'stdout') {
 }
 
 function clearConsole() {
-    elements.consoleOutput.innerHTML = '';
-    appendToConsole('Console cleared.\n', 'info');
+    if (elements.consoleOutput) {
+        elements.consoleOutput.innerHTML = '';
+        appendToConsole('Console cleared.\n', 'info');
+    }
 }
 
 async function handleImportSlides(evt) {
@@ -1511,43 +1841,28 @@ function formatElapsed(ms) {
     return `${m}:${s}`;
 }
 
-// Server status monitoring
+// Server status monitoring - simplified to just check backend connectivity
 async function updateServerStatus() {
     try {
-        const response = await fetch('/api/servers/status');
-        const status = await response.json();
-        
-        // Update GUI status (always running since we're here)
-        elements.guiIndicator.className = 'status-indicator running';
-        elements.guiUrl.textContent = status.gui.url;
-        
-        // Update backend status
-        if (status.backend.connected) {
-            elements.backendIndicator.className = 'status-indicator running';
-            elements.backendUrl.textContent = status.backend.url;
-        } else {
-            elements.backendIndicator.className = 'status-indicator';
-            elements.backendUrl.textContent = `${status.backend.url} (${status.backend.status})`;
-        }
-        
-        // Update conversion server status
-        if (status.conversion.connected) {
-            elements.conversionIndicator.className = 'status-indicator running';
-            elements.conversionUrl.textContent = status.conversion.url;
-            if (status.conversion.health) {
-                const health = status.conversion.health;
-                elements.conversionUrl.textContent += ` (${health.activeConversions}/${health.maxConcurrent})`;
+        // Test backend connectivity
+        const response = await fetch('http://localhost:3102/api/slides');
+        if (response.ok) {
+            console.log('Backend server is accessible');
+            // Update any status indicators if they exist
+            const backendIndicator = document.querySelector('.backend-indicator');
+            if (backendIndicator) {
+                backendIndicator.className = 'status-indicator running';
             }
         } else {
-            elements.conversionIndicator.className = 'status-indicator';
-            elements.conversionUrl.textContent = `${status.conversion.url} (${status.conversion.status})`;
+            console.warn('Backend server returned error:', response.status);
         }
-        
     } catch (error) {
-        console.error('Failed to update server status:', error);
-        // Mark all as disconnected on error
-        elements.backendIndicator.className = 'status-indicator';
-        elements.conversionIndicator.className = 'status-indicator';
+        console.error('Backend server is not accessible:', error.message);
+        // Update any status indicators if they exist
+        const backendIndicator = document.querySelector('.backend-indicator');
+        if (backendIndicator) {
+            backendIndicator.className = 'status-indicator';
+        }
     }
 }
 
@@ -1559,3 +1874,475 @@ document.addEventListener('DOMContentLoaded', () => {
     updateServerStatus();
     setInterval(updateServerStatus, 5000);
 });
+
+// ===== CONFIGURATION MANAGEMENT =====
+
+let pathologyConfig = {};
+
+// Load pathology configuration from backend
+async function loadPathologyConfig() {
+    try {
+        console.log('Loading pathology configuration from backend...');
+        const response = await fetch('http://localhost:3102/api/pathology-config');
+        if (response.ok) {
+            const data = await response.json();
+            pathologyConfig = data.config;
+            console.log('Pathology configuration loaded successfully:', pathologyConfig);
+            updateConfigurationUI();
+            
+            // Also update the legacy currentConfig for backward compatibility
+            if (pathologyConfig.storage) {
+                currentConfig.sourceDir = pathologyConfig.storage.slidesDir;
+                currentConfig.destinationDir = pathologyConfig.storage.dziDir;
+            }
+            updateUIFromConfig();
+        } else {
+            console.warn('Failed to load pathology configuration:', response.status, response.statusText);
+        }
+    } catch (error) {
+        console.error('Error loading pathology configuration:', error);
+    }
+}
+
+// Update UI elements from pathology configuration
+function updateConfigurationUI() {
+    console.log('🎨 Updating configuration UI...');
+    if (!pathologyConfig) {
+        console.warn('🎨 No pathology config available');
+        return;
+    }
+    console.log('🎨 Using pathology config:', pathologyConfig);
+    
+    // System Configuration
+    if (elements.deploymentMode && pathologyConfig.deployment?.mode) {
+        elements.deploymentMode.value = pathologyConfig.deployment.mode;
+    }
+    if (elements.mainServerPort && pathologyConfig.deployment?.mainServer?.port) {
+        elements.mainServerPort.value = pathologyConfig.deployment.mainServer.port;
+    }
+    if (elements.slidesDir && pathologyConfig.storage?.slidesDir) {
+        elements.slidesDir.textContent = pathologyConfig.storage.slidesDir;
+    }
+    if (elements.dziDir && pathologyConfig.storage?.dziDir) {
+        elements.dziDir.textContent = pathologyConfig.storage.dziDir;
+    }
+    if (elements.tempDir && pathologyConfig.storage?.tempDir) {
+        elements.tempDir.textContent = pathologyConfig.storage.tempDir;
+    }
+    if (elements.autoProcessorEnabled && pathologyConfig.autoProcessor?.enabled !== undefined) {
+        elements.autoProcessorEnabled.checked = pathologyConfig.autoProcessor.enabled;
+    }
+    
+    // VIPS Configuration
+    if (elements.vipsConcurrency && pathologyConfig.conversion?.vips?.concurrency) {
+        elements.vipsConcurrency.value = pathologyConfig.conversion.vips.concurrency;
+    }
+    if (elements.vipsCacheMemory && pathologyConfig.conversion?.vips?.cacheMemoryGB) {
+        elements.vipsCacheMemory.value = pathologyConfig.conversion.vips.cacheMemoryGB;
+    }
+    if (elements.vipsQuality && pathologyConfig.conversion?.vips?.quality) {
+        elements.vipsQuality.value = pathologyConfig.conversion.vips.quality;
+        if (elements.vipsQualityValue) {
+            elements.vipsQualityValue.textContent = pathologyConfig.conversion.vips.quality;
+        }
+    }
+    if (elements.vipsCompression && pathologyConfig.conversion?.vips?.compression) {
+        elements.vipsCompression.value = pathologyConfig.conversion.vips.compression;
+    }
+}
+
+// Setup configuration tabs
+function setupConfigurationTabs() {
+    console.log('📑 Setting up configuration tabs...');
+    console.log('📑 Found tab buttons:', elements.tabBtns ? elements.tabBtns.length : 0);
+    console.log('📑 Found tab panels:', elements.tabPanels ? elements.tabPanels.length : 0);
+    
+    // Debug: Log all tab buttons and panels
+    if (elements.tabBtns) {
+        elements.tabBtns.forEach((btn, i) => {
+            console.log(`📑 Tab button ${i}:`, btn.getAttribute('data-tab'), btn.className);
+        });
+    }
+    if (elements.tabPanels) {
+        elements.tabPanels.forEach((panel, i) => {
+            console.log(`📑 Tab panel ${i}:`, panel.id, panel.className);
+        });
+    }
+    
+    if (elements.tabBtns) {
+        elements.tabBtns.forEach((btn, index) => {
+            console.log(`📑 Setting up tab button ${index}:`, btn.getAttribute('data-tab'));
+            btn.addEventListener('click', () => {
+                const tabName = btn.getAttribute('data-tab');
+                console.log('📑 Tab clicked:', tabName);
+                switchConfigTab(tabName);
+            });
+        });
+    } else {
+        console.warn('📑 No tab buttons found!');
+    }
+    
+    // Setup VIPS quality slider
+    if (elements.vipsQuality && elements.vipsQualityValue) {
+        elements.vipsQuality.addEventListener('input', () => {
+            elements.vipsQualityValue.textContent = elements.vipsQuality.value;
+        });
+    }
+    
+    // Setup configuration action buttons
+    if (elements.saveConfigBtn) {
+        elements.saveConfigBtn.addEventListener('click', savePathologyConfig);
+    }
+    if (elements.reloadConfigBtn) {
+        elements.reloadConfigBtn.addEventListener('click', reloadPathologyConfig);
+    }
+    if (elements.validateConfigBtn) {
+        elements.validateConfigBtn.addEventListener('click', validatePathologyConfig);
+    }
+    
+    // Setup server management buttons
+    if (elements.showAddServerBtn) {
+        elements.showAddServerBtn.addEventListener('click', showAddServerForm);
+    }
+    if (elements.addServerBtn) {
+        elements.addServerBtn.addEventListener('click', addConversionServer);
+    }
+    if (elements.cancelAddServerBtn) {
+        elements.cancelAddServerBtn.addEventListener('click', hideAddServerForm);
+    }
+    if (elements.refreshServersBtn) {
+        elements.refreshServersBtn.addEventListener('click', refreshServersList);
+    }
+}
+
+// Switch configuration tab
+function switchConfigTab(tabName) {
+    console.log('🔄 Switching to config tab:', tabName);
+    
+    // Update tab buttons
+    if (elements.tabBtns) {
+        elements.tabBtns.forEach(btn => {
+            btn.classList.toggle('active', btn.getAttribute('data-tab') === tabName);
+        });
+    }
+    
+    // Update tab panels
+    if (elements.tabPanels) {
+        elements.tabPanels.forEach(panel => {
+            panel.classList.toggle('active', panel.id === `${tabName}-tab`);
+        });
+    }
+}
+
+// Save pathology configuration
+async function savePathologyConfig() {
+    try {
+        showMessage('Saving configuration...', 'info');
+        
+        const updatedConfig = {
+            deployment: {
+                mode: elements.deploymentMode?.value || 'single',
+                mainServer: {
+                    port: parseInt(elements.mainServerPort?.value) || 3102,
+                    host: '0.0.0.0'
+                }
+            },
+            storage: {
+                slidesDir: elements.slidesDir?.textContent || 'C:\\OG',
+                dziDir: elements.dziDir?.textContent || 'C:\\dzi',
+                tempDir: elements.tempDir?.textContent || 'C:\\temp'
+            },
+            autoProcessor: {
+                enabled: elements.autoProcessorEnabled?.checked !== false
+            },
+            conversion: {
+                defaultConcurrency: parseInt(elements.defaultConcurrency?.value) || 8,
+                vips: {
+                    concurrency: parseInt(elements.vipsConcurrency?.value) || 32,
+                    cacheMemoryGB: parseInt(elements.vipsCacheMemory?.value) || 64,
+                    quality: parseInt(elements.vipsQuality?.value) || 95,
+                    compression: elements.vipsCompression?.value || 'lzw'
+                },
+                dzi: {
+                    overlap: parseInt(elements.overlap?.value) || 1,
+                    layout: elements.layout?.value || 'dz',
+                    embedIcc: elements.embedIcc?.checked || false,
+                    sequential: elements.sequential?.checked || true,
+                    novector: elements.novector?.checked || false
+                }
+            },
+            server: {
+                port: parseInt(elements.serverPort?.value) || 3000
+            }
+        };
+        
+        const response = await fetch('http://localhost:3102/api/pathology-config', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updatedConfig)
+        });
+        
+        if (response.ok) {
+            const result = await response.json();
+            pathologyConfig = result.config;
+            showMessage('Configuration saved successfully!', 'success');
+        } else {
+            const error = await response.json();
+            showMessage(`Failed to save configuration: ${error.error}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error saving configuration:', error);
+        showMessage(`Error saving configuration: ${error.message}`, 'error');
+    }
+}
+
+// Reload pathology configuration
+async function reloadPathologyConfig() {
+    try {
+        const response = await fetch('http://localhost:3102/api/pathology-config/reload', {
+            method: 'POST'
+        });
+        
+        if (response.ok) {
+            const result = await response.json();
+            pathologyConfig = result.config;
+            updateConfigurationUI();
+            showMessage('Configuration reloaded successfully!', 'success');
+        } else {
+            const error = await response.json();
+            showMessage(`Failed to reload configuration: ${error.error}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error reloading configuration:', error);
+        showMessage(`Error reloading configuration: ${error.message}`, 'error');
+    }
+}
+
+// Validate pathology configuration
+async function validatePathologyConfig() {
+    try {
+        const configToValidate = {
+            deployment: {
+                mode: elements.deploymentMode?.value || 'single',
+                mainServer: {
+                    port: parseInt(elements.mainServerPort?.value) || 3102
+                }
+            },
+            storage: {
+                slidesDir: elements.slidesDir?.textContent || 'C:\\OG',
+                dziDir: elements.dziDir?.textContent || 'C:\\dzi'
+            },
+            conversion: {
+                defaultConcurrency: parseInt(elements.defaultConcurrency?.value) || 8,
+                vips: {
+                    concurrency: parseInt(elements.vipsConcurrency?.value) || 32,
+                    quality: parseInt(elements.vipsQuality?.value) || 95
+                }
+            }
+        };
+        
+        const response = await fetch('http://localhost:3102/api/pathology-config/validate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(configToValidate)
+        });
+        
+        if (response.ok) {
+            const result = await response.json();
+            if (result.valid) {
+                showMessage('Configuration is valid!', 'success');
+            } else {
+                showMessage(`Configuration errors: ${result.errors.join(', ')}`, 'error');
+            }
+        } else {
+            const error = await response.json();
+            showMessage(`Validation failed: ${error.error}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error validating configuration:', error);
+        showMessage(`Error validating configuration: ${error.message}`, 'error');
+    }
+}
+
+// Show/hide messages
+function showMessage(message, type) {
+    hideMessages();
+    
+    if (type === 'error' && elements.validationErrors) {
+        elements.validationErrors.textContent = message;
+        elements.validationErrors.classList.add('show');
+        setTimeout(() => elements.validationErrors.classList.remove('show'), 5000);
+    } else if (type === 'success' && elements.successMessage) {
+        elements.successMessage.textContent = message;
+        elements.successMessage.classList.add('show');
+        setTimeout(() => elements.successMessage.classList.remove('show'), 3000);
+    }
+}
+
+function hideMessages() {
+    if (elements.validationErrors) elements.validationErrors.classList.remove('show');
+    if (elements.successMessage) elements.successMessage.classList.remove('show');
+}
+
+// ===== SERVER MANAGEMENT =====
+
+// Refresh servers list
+async function refreshServersList() {
+    try {
+        const response = await fetch('http://localhost:3102/api/conversion-servers');
+        if (response.ok) {
+            const data = await response.json();
+            updateServersList(data);
+            updateServerMetrics(data);
+        } else {
+            console.warn('Failed to fetch servers list');
+        }
+    } catch (error) {
+        console.error('Error fetching servers list:', error);
+    }
+}
+
+// Update servers list UI
+function updateServersList(data) {
+    if (!elements.serversList) return;
+    
+    elements.serversList.innerHTML = '';
+    
+    if (data.servers && data.servers.length > 0) {
+        data.servers.forEach(server => {
+            const serverItem = createServerItem(server);
+            elements.serversList.appendChild(serverItem);
+        });
+    } else {
+        elements.serversList.innerHTML = '<div style="padding: 20px; text-align: center; color: #cccccc;">No conversion servers registered</div>';
+    }
+}
+
+// Create server item element
+function createServerItem(server) {
+    const div = document.createElement('div');
+    div.className = 'server-item';
+    div.setAttribute('data-server-id', server.id);
+    
+    const loadPercentage = server.maxConcurrent > 0 ? (server.activeConversions / server.maxConcurrent) * 100 : 0;
+    const statusClass = server.isHealthy ? 'online' : 'offline';
+    
+    div.innerHTML = `
+        <div class="server-header">
+            <div>
+                <div class="server-name">🖥️ ${server.id}</div>
+                <div class="server-address">${server.host}:${server.port}</div>
+            </div>
+            <div class="server-controls">
+                <button class="btn btn-small" onclick="configureServer('${server.id}')">Configure</button>
+                <button class="btn btn-danger btn-small" onclick="removeServer('${server.id}')">Remove</button>
+            </div>
+        </div>
+        <div class="server-status">
+            <span class="status-badge ${statusClass}">${server.isHealthy ? '🟢 Online' : '🔴 Offline'}</span>
+            <div class="load-bar">
+                <div class="load-fill" style="width: ${loadPercentage}%"></div>
+            </div>
+            <div class="load-info">${server.activeConversions}/${server.maxConcurrent}</div>
+        </div>
+    `;
+    
+    return div;
+}
+
+// Update server metrics
+function updateServerMetrics(data) {
+    if (elements.totalServersMetric) {
+        elements.totalServersMetric.textContent = data.totalServers || 0;
+    }
+    if (elements.totalCapacityMetric) {
+        elements.totalCapacityMetric.textContent = data.totalCapacity || 0;
+    }
+    if (elements.activeConversionsMetric) {
+        elements.activeConversionsMetric.textContent = data.activeConversions || 0;
+    }
+}
+
+// Show add server form
+function showAddServerForm() {
+    if (elements.addServerForm) {
+        elements.addServerForm.classList.add('active');
+    }
+}
+
+// Hide add server form
+function hideAddServerForm() {
+    if (elements.addServerForm) {
+        elements.addServerForm.classList.remove('active');
+        // Clear form
+        if (elements.newServerHost) elements.newServerHost.value = '';
+        if (elements.newServerPort) elements.newServerPort.value = '3001';
+        if (elements.newServerConcurrency) elements.newServerConcurrency.value = '8';
+        if (elements.newServerAutoStart) elements.newServerAutoStart.checked = false;
+    }
+}
+
+// Add conversion server
+async function addConversionServer() {
+    try {
+        const serverData = {
+            host: elements.newServerHost?.value || 'localhost',
+            port: parseInt(elements.newServerPort?.value) || 3001,
+            maxConcurrent: parseInt(elements.newServerConcurrency?.value) || 8,
+            autoStart: elements.newServerAutoStart?.checked || false
+        };
+        
+        if (!serverData.host.trim()) {
+            showMessage('Host is required', 'error');
+            return;
+        }
+        
+        const response = await fetch('http://localhost:3102/api/conversion-servers/add', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(serverData)
+        });
+        
+        if (response.ok) {
+            const result = await response.json();
+            showMessage('Conversion server added successfully!', 'success');
+            hideAddServerForm();
+            await refreshServersList();
+        } else {
+            const error = await response.json();
+            showMessage(`Failed to add server: ${error.error}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error adding conversion server:', error);
+        showMessage(`Error adding server: ${error.message}`, 'error');
+    }
+}
+
+// Remove conversion server
+async function removeServer(serverId) {
+    if (!confirm(`Are you sure you want to remove server "${serverId}"?`)) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`http://localhost:3102/api/conversion-servers/${encodeURIComponent(serverId)}`, {
+            method: 'DELETE'
+        });
+        
+        if (response.ok) {
+            showMessage('Conversion server removed successfully!', 'success');
+            await refreshServersList();
+        } else {
+            const error = await response.json();
+            showMessage(`Failed to remove server: ${error.error}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error removing conversion server:', error);
+        showMessage(`Error removing server: ${error.message}`, 'error');
+    }
+}
+
+// Configure server (placeholder)
+function configureServer(serverId) {
+    alert(`Server configuration for "${serverId}" - Feature coming soon!`);
+}

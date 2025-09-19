@@ -13,7 +13,8 @@
     "gui": "node gui-server.js",
     "gui:dev": "set NODE_ENV=development && node gui-server.js",
     "conversion-server": "set CONVERSION_PORT=3001 && set MAX_CONCURRENT=8 && node conversion-server.js",
-    "start:conversion-server": "set CONVERSION_PORT=3001 && set MAX_CONCURRENT=8 && node conversion-server.js"
+    "start:conversion-server": "set CONVERSION_PORT=3001 && set MAX_CONCURRENT=8 && node conversion-server.js",
+    "test:hybrid": "node test-hybrid-system.js"
   },
   "dependencies": {
     "axios": "^1.11.0",

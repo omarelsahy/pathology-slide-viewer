@@ -1,13 +1,33 @@
 require('dotenv').config();
 const express = require('express');
-const path = require('path');
 const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
 const cors = require('cors');
 const { spawn, exec, execSync } = require('child_process');
 const WebSocket = require('ws');
 const { Worker } = require('worker_threads');
+
+// Load configuration
 const config = require('./config');
+
+// Load centralized pathology configuration
+let pathologyConfig = {};
+try {
+  pathologyConfig = require('./pathology-config.json');
+  console.log('✅ Loaded centralized pathology configuration');
+} catch (error) {
+  console.warn('⚠️  Could not load pathology-config.json, using defaults:', error.message);
+  pathologyConfig = {
+    deployment: { mode: 'single' },
+    conversion: { defaultConcurrency: 8 },
+    conversionServers: { autoDiscovery: false, servers: [] }
+  };
+}
+
+// Conversion Server Registry
+const conversionServers = new Map();
+let lastServerCleanup = Date.now();
 const { workerPool } = require('./workerPool');
 
 // Load VIPS configuration
@@ -1850,13 +1870,29 @@ wss.on('connection', (ws) => {
   });
 });
 
-// Initialize auto-processor in server mode
+// Initialize auto-processor in server mode with centralized configuration
 if (config.isServerMode()) {
   const OptimizedAutoProcessor = require('./optimized-auto-processor');
-  autoProcessor = new OptimizedAutoProcessor(config.slidesDir, {
-    enabled: true,
-    conversionServerUrl: 'http://localhost:3001'
-  });
+  
+  // Use centralized configuration for auto-processor
+  const autoProcessorConfig = {
+    enabled: pathologyConfig.autoProcessor?.enabled !== false,
+    loadBalanced: pathologyConfig.deployment?.mode === 'distributed',
+    mainServerUrl: `http://localhost:${pathologyConfig.deployment?.mainServer?.port || 3102}`,
+    conversionServerUrl: pathologyConfig.conversionServers?.servers?.[0] ? 
+      `http://${pathologyConfig.conversionServers.servers[0].host}:${pathologyConfig.conversionServers.servers[0].port}` :
+      'http://localhost:3001'
+  };
+  
+  console.log('🔧 Initializing auto-processor with centralized configuration:');
+  console.log(`   └─ Mode: ${pathologyConfig.deployment?.mode || 'single'}`);
+  console.log(`   └─ Load Balanced: ${autoProcessorConfig.loadBalanced}`);
+  console.log(`   └─ Conversion Server: ${autoProcessorConfig.conversionServerUrl}`);
+  
+  autoProcessor = new OptimizedAutoProcessor(
+    pathologyConfig.storage?.slidesDir || config.slidesDir, 
+    autoProcessorConfig
+  );
 }
 
 // Auto Processor Event Handlers (only in server mode)
@@ -1942,14 +1978,493 @@ if (config.isServerMode() && autoProcessor) {
   });
 }
 
-// Helper function to broadcast to all WebSocket clients
-function broadcastToClients(message) {
-  wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify(message));
+// Periodic cleanup of stale conversion servers
+if (config.isServerMode()) {
+  setInterval(() => {
+    cleanupStaleServers();
+  }, 30000); // Check every 30 seconds
+}
+
+// ===== CENTRALIZED CONFIGURATION AND CONVERSION SERVER REGISTRY =====
+
+// API endpoint to get centralized configuration
+app.get('/api/conversion-config', (req, res) => {
+  if (config.isClientMode()) {
+    return res.status(503).json({ error: 'Configuration endpoint only available in server mode' });
+  }
+
+  const totalCores = require('os').cpus().length;
+  const totalMemoryGB = Math.round(require('os').totalmem() / 1024 / 1024 / 1024);
+  
+  // Generate dynamic configuration based on system resources
+  const dynamicConfig = {
+    vipsConfig: {
+      concurrency: pathologyConfig.conversion?.vips?.concurrency || Math.max(totalCores, 32),
+      cacheMemoryGB: pathologyConfig.conversion?.vips?.cacheMemoryGB || Math.min(Math.floor(totalMemoryGB * 0.6), 64),
+      cacheMaxFiles: pathologyConfig.conversion?.vips?.cacheMaxFiles || 1000,
+      quality: pathologyConfig.conversion?.vips?.quality || 95,
+      compression: pathologyConfig.conversion?.vips?.compression || 'lzw',
+      bigtiff: pathologyConfig.conversion?.vips?.bigtiff !== false,
+      vector: pathologyConfig.conversion?.vips?.vector !== false,
+      warning: pathologyConfig.conversion?.vips?.warning === true
+    },
+    conversionSettings: {
+      maxConcurrent: pathologyConfig.conversion?.defaultConcurrency || Math.min(totalCores, 8),
+      timeout: pathologyConfig.conversion?.timeout || 30000,
+      pollInterval: pathologyConfig.conversion?.pollInterval || 1000
+    },
+    storage: {
+      slidesDir: pathologyConfig.storage?.slidesDir || config.slidesDir,
+      dziDir: pathologyConfig.storage?.dziDir || config.dziDir,
+      tempDir: pathologyConfig.storage?.tempDir || require('os').tmpdir()
+    }
+  };
+
+  res.json(dynamicConfig);
+});
+
+// API endpoint for conversion servers to register themselves
+app.post('/api/conversion-servers/register', (req, res) => {
+  if (config.isClientMode()) {
+    return res.status(503).json({ error: 'Server registration only available in server mode' });
+  }
+
+  const { id, host, port, maxConcurrent, capabilities } = req.body;
+  
+  if (!id || !host || !port) {
+    return res.status(400).json({ error: 'Missing required fields: id, host, port' });
+  }
+
+  const serverInfo = {
+    id,
+    host,
+    port,
+    maxConcurrent: maxConcurrent || pathologyConfig.conversion?.defaultConcurrency || 8,
+    capabilities: capabilities || ['icc-transform', 'dzi-generation'],
+    registeredAt: Date.now(),
+    lastSeen: Date.now(),
+    activeConversions: 0,
+    totalConversions: 0,
+    status: 'active'
+  };
+
+  conversionServers.set(id, serverInfo);
+  console.log(`✅ Conversion server registered: ${id} at ${host}:${port} (max: ${serverInfo.maxConcurrent})`);
+  
+  // Broadcast server registration to WebSocket clients
+  broadcastToClients({
+    type: 'conversion_server_registered',
+    server: serverInfo
+  });
+
+  res.json({ 
+    success: true, 
+    message: 'Server registered successfully',
+    config: {
+      healthCheckInterval: pathologyConfig.conversionServers?.healthCheckInterval || 10000,
+      registrationTimeout: pathologyConfig.conversionServers?.registrationTimeout || 30000
     }
   });
+});
+
+// Helper function to broadcast to all WebSocket clients
+function broadcastToClients(message) {
+  if (wss && wss.clients) {
+    wss.clients.forEach(client => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify(message));
+      }
+    });
+  }
 }
+
+// API endpoint for conversion servers to send heartbeat
+app.post('/api/conversion-servers/:id/heartbeat', (req, res) => {
+  if (config.isClientMode()) {
+    return res.status(503).json({ error: 'Heartbeat endpoint only available in server mode' });
+  }
+
+  const { id } = req.params;
+  const { activeConversions, totalConversions, status } = req.body;
+
+  if (!conversionServers.has(id)) {
+    return res.status(404).json({ error: 'Server not registered' });
+  }
+
+  const server = conversionServers.get(id);
+  server.lastSeen = Date.now();
+  server.activeConversions = activeConversions || 0;
+  server.totalConversions = totalConversions || server.totalConversions;
+  server.status = status || 'active';
+
+  conversionServers.set(id, server);
+  
+  res.json({ success: true });
+});
+
+// API endpoint to list registered conversion servers
+app.get('/api/conversion-servers', (req, res) => {
+  if (config.isClientMode()) {
+    return res.status(503).json({ error: 'Server list only available in server mode' });
+  }
+
+  // Clean up stale servers
+  cleanupStaleServers();
+
+  const servers = Array.from(conversionServers.values()).map(server => ({
+    ...server,
+    isHealthy: Date.now() - server.lastSeen < (pathologyConfig.conversionServers?.registrationTimeout || 30000)
+  }));
+
+  res.json({
+    servers,
+    totalServers: servers.length,
+    activeServers: servers.filter(s => s.isHealthy).length,
+    totalCapacity: servers.filter(s => s.isHealthy).reduce((sum, s) => sum + s.maxConcurrent, 0),
+    activeConversions: servers.reduce((sum, s) => sum + s.activeConversions, 0)
+  });
+});
+
+// Helper function to clean up stale servers
+function cleanupStaleServers() {
+  const now = Date.now();
+  const timeout = pathologyConfig.conversionServers?.registrationTimeout || 30000;
+  
+  // Only cleanup every 30 seconds to avoid excessive processing
+  if (now - lastServerCleanup < 30000) return;
+  
+  const staleServers = [];
+  for (const [id, server] of conversionServers.entries()) {
+    if (now - server.lastSeen > timeout) {
+      staleServers.push(id);
+      conversionServers.delete(id);
+    }
+  }
+  
+  if (staleServers.length > 0) {
+    console.log(`🧹 Cleaned up ${staleServers.length} stale conversion servers: ${staleServers.join(', ')}`);
+    broadcastToClients({
+      type: 'conversion_servers_cleanup',
+      removedServers: staleServers
+    });
+  }
+  
+  lastServerCleanup = now;
+}
+
+// Helper function to select best conversion server for load balancing
+function selectConversionServer() {
+  cleanupStaleServers();
+  
+  const now = Date.now();
+  const timeout = pathologyConfig.conversionServers?.registrationTimeout || 30000;
+  
+  const available = Array.from(conversionServers.values())
+    .filter(server => now - server.lastSeen < timeout && server.status === 'active')
+    .filter(server => server.activeConversions < server.maxConcurrent)
+    .sort((a, b) => {
+      // Sort by load percentage (activeConversions / maxConcurrent)
+      const loadA = a.activeConversions / a.maxConcurrent;
+      const loadB = b.activeConversions / b.maxConcurrent;
+      return loadA - loadB;
+    });
+  
+  return available[0] || null;
+}
+
+// ===== ENHANCED CONFIGURATION MANAGEMENT API =====
+
+// API endpoint to get full pathology configuration
+app.get('/api/pathology-config', (req, res) => {
+  if (config.isClientMode()) {
+    return res.status(503).json({ error: 'Configuration management only available in server mode' });
+  }
+
+  try {
+    // Return the current pathology configuration with runtime info
+    const runtimeInfo = {
+      systemInfo: {
+        totalCores: require('os').cpus().length,
+        totalMemoryGB: Math.round(require('os').totalmem() / 1024 / 1024 / 1024),
+        platform: require('os').platform(),
+        hostname: require('os').hostname()
+      },
+      serverStatus: {
+        uptime: process.uptime(),
+        memoryUsage: process.memoryUsage(),
+        activeConversions: Array.from(conversionServers.values()).reduce((sum, s) => sum + s.activeConversions, 0),
+        registeredServers: conversionServers.size
+      }
+    };
+
+    res.json({
+      config: pathologyConfig,
+      runtime: runtimeInfo,
+      lastModified: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Failed to get pathology configuration:', error);
+    res.status(500).json({ error: 'Failed to retrieve configuration', details: error.message });
+  }
+});
+
+// API endpoint to update pathology configuration
+app.put('/api/pathology-config', (req, res) => {
+  if (config.isClientMode()) {
+    return res.status(503).json({ error: 'Configuration management only available in server mode' });
+  }
+
+  try {
+    const newConfig = req.body;
+    
+    // Validate configuration structure
+    if (!newConfig || typeof newConfig !== 'object') {
+      return res.status(400).json({ error: 'Invalid configuration format' });
+    }
+
+    // Backup current configuration
+    const backupConfig = { ...pathologyConfig };
+    
+    // Update configuration
+    pathologyConfig = { ...pathologyConfig, ...newConfig };
+    
+    // Write to file
+    const fs = require('fs');
+    const configPath = path.join(__dirname, 'pathology-config.json');
+    fs.writeFileSync(configPath, JSON.stringify(pathologyConfig, null, 2));
+    
+    console.log('✅ Pathology configuration updated successfully');
+    
+    // Broadcast configuration change to WebSocket clients
+    broadcastToClients({
+      type: 'config_updated',
+      config: pathologyConfig,
+      timestamp: new Date().toISOString()
+    });
+    
+    res.json({ 
+      success: true, 
+      message: 'Configuration updated successfully',
+      config: pathologyConfig
+    });
+    
+  } catch (error) {
+    console.error('Failed to update pathology configuration:', error);
+    res.status(500).json({ error: 'Failed to update configuration', details: error.message });
+  }
+});
+
+// API endpoint to reload configuration from file
+app.post('/api/pathology-config/reload', (req, res) => {
+  if (config.isClientMode()) {
+    return res.status(503).json({ error: 'Configuration reload only available in server mode' });
+  }
+
+  try {
+    // Reload configuration from file
+    delete require.cache[require.resolve('./pathology-config.json')];
+    pathologyConfig = require('./pathology-config.json');
+    
+    console.log('🔄 Pathology configuration reloaded from file');
+    
+    // Broadcast reload to WebSocket clients
+    broadcastToClients({
+      type: 'config_reloaded',
+      config: pathologyConfig,
+      timestamp: new Date().toISOString()
+    });
+    
+    res.json({ 
+      success: true, 
+      message: 'Configuration reloaded successfully',
+      config: pathologyConfig
+    });
+    
+  } catch (error) {
+    console.error('Failed to reload pathology configuration:', error);
+    res.status(500).json({ error: 'Failed to reload configuration', details: error.message });
+  }
+});
+
+// API endpoint to validate configuration
+app.post('/api/pathology-config/validate', (req, res) => {
+  if (config.isClientMode()) {
+    return res.status(503).json({ error: 'Configuration validation only available in server mode' });
+  }
+
+  try {
+    const configToValidate = req.body;
+    const validationErrors = [];
+    
+    // Validate deployment section
+    if (configToValidate.deployment) {
+      const { mode, mainServer } = configToValidate.deployment;
+      if (mode && !['single', 'distributed'].includes(mode)) {
+        validationErrors.push('deployment.mode must be "single" or "distributed"');
+      }
+      if (mainServer && mainServer.port && (mainServer.port < 1 || mainServer.port > 65535)) {
+        validationErrors.push('deployment.mainServer.port must be between 1 and 65535');
+      }
+    }
+    
+    // Validate storage section
+    if (configToValidate.storage) {
+      const { slidesDir, dziDir } = configToValidate.storage;
+      if (slidesDir && !path.isAbsolute(slidesDir)) {
+        validationErrors.push('storage.slidesDir must be an absolute path');
+      }
+      if (dziDir && !path.isAbsolute(dziDir)) {
+        validationErrors.push('storage.dziDir must be an absolute path');
+      }
+    }
+    
+    // Validate conversion section
+    if (configToValidate.conversion) {
+      const { defaultConcurrency, vips } = configToValidate.conversion;
+      if (defaultConcurrency && (defaultConcurrency < 1 || defaultConcurrency > 64)) {
+        validationErrors.push('conversion.defaultConcurrency must be between 1 and 64');
+      }
+      if (vips) {
+        if (vips.concurrency && (vips.concurrency < 1 || vips.concurrency > 128)) {
+          validationErrors.push('conversion.vips.concurrency must be between 1 and 128');
+        }
+        if (vips.quality && (vips.quality < 1 || vips.quality > 100)) {
+          validationErrors.push('conversion.vips.quality must be between 1 and 100');
+        }
+      }
+    }
+    
+    const isValid = validationErrors.length === 0;
+    
+    res.json({
+      valid: isValid,
+      errors: validationErrors,
+      message: isValid ? 'Configuration is valid' : 'Configuration has validation errors'
+    });
+    
+  } catch (error) {
+    console.error('Failed to validate configuration:', error);
+    res.status(500).json({ error: 'Failed to validate configuration', details: error.message });
+  }
+});
+
+// API endpoint to add a new conversion server
+app.post('/api/conversion-servers/add', (req, res) => {
+  if (config.isClientMode()) {
+    return res.status(503).json({ error: 'Server management only available in server mode' });
+  }
+
+  try {
+    const { host, port, maxConcurrent, autoStart } = req.body;
+    
+    if (!host || !port) {
+      return res.status(400).json({ error: 'Host and port are required' });
+    }
+    
+    // Generate unique server ID
+    const serverId = `server-${host}-${port}`;
+    
+    // Add to pathology configuration
+    if (!pathologyConfig.conversionServers) {
+      pathologyConfig.conversionServers = { servers: [] };
+    }
+    if (!pathologyConfig.conversionServers.servers) {
+      pathologyConfig.conversionServers.servers = [];
+    }
+    
+    const newServer = {
+      id: serverId,
+      host,
+      port: parseInt(port),
+      maxConcurrent: parseInt(maxConcurrent) || 8,
+      autoStart: autoStart === true
+    };
+    
+    // Check if server already exists
+    const existingIndex = pathologyConfig.conversionServers.servers.findIndex(s => s.id === serverId);
+    if (existingIndex >= 0) {
+      pathologyConfig.conversionServers.servers[existingIndex] = newServer;
+    } else {
+      pathologyConfig.conversionServers.servers.push(newServer);
+    }
+    
+    // Save configuration
+    const fs = require('fs');
+    const configPath = path.join(__dirname, 'pathology-config.json');
+    fs.writeFileSync(configPath, JSON.stringify(pathologyConfig, null, 2));
+    
+    console.log(`✅ Added conversion server: ${serverId}`);
+    
+    // Broadcast server addition
+    broadcastToClients({
+      type: 'conversion_server_added',
+      server: newServer,
+      timestamp: new Date().toISOString()
+    });
+    
+    res.json({
+      success: true,
+      message: 'Conversion server added successfully',
+      server: newServer
+    });
+    
+  } catch (error) {
+    console.error('Failed to add conversion server:', error);
+    res.status(500).json({ error: 'Failed to add conversion server', details: error.message });
+  }
+});
+
+// API endpoint to remove a conversion server
+app.delete('/api/conversion-servers/:id', (req, res) => {
+  if (config.isClientMode()) {
+    return res.status(503).json({ error: 'Server management only available in server mode' });
+  }
+
+  try {
+    const { id } = req.params;
+    
+    // Remove from registry
+    const wasRegistered = conversionServers.has(id);
+    if (wasRegistered) {
+      conversionServers.delete(id);
+    }
+    
+    // Remove from configuration
+    if (pathologyConfig.conversionServers && pathologyConfig.conversionServers.servers) {
+      const initialLength = pathologyConfig.conversionServers.servers.length;
+      pathologyConfig.conversionServers.servers = pathologyConfig.conversionServers.servers.filter(s => s.id !== id);
+      const wasInConfig = pathologyConfig.conversionServers.servers.length < initialLength;
+      
+      if (wasInConfig) {
+        // Save configuration
+        const fs = require('fs');
+        const configPath = path.join(__dirname, 'pathology-config.json');
+        fs.writeFileSync(configPath, JSON.stringify(pathologyConfig, null, 2));
+      }
+    }
+    
+    console.log(`🗑️  Removed conversion server: ${id}`);
+    
+    // Broadcast server removal
+    broadcastToClients({
+      type: 'conversion_server_removed',
+      serverId: id,
+      timestamp: new Date().toISOString()
+    });
+    
+    res.json({
+      success: true,
+      message: 'Conversion server removed successfully',
+      serverId: id,
+      wasRegistered,
+      wasInConfig: true
+    });
+    
+  } catch (error) {
+    console.error('Failed to remove conversion server:', error);
+    res.status(500).json({ error: 'Failed to remove conversion server', details: error.message });
+  }
+});
 
 // API endpoint to list available slides
 app.get('/api/slides', async (req, res) => {

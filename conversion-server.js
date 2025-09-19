@@ -7,24 +7,32 @@
  */
 
 const express = require('express');
-const { Worker } = require('worker_threads');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
 const EventEmitter = require('events');
+const fetch = require('node-fetch');
 
 class ConversionServer extends EventEmitter {
   constructor(options = {}) {
     super();
     
+    this.serverId = options.id || `conversion-${require('os').hostname()}-${Date.now()}`;
     this.port = options.port || 3001;
-    this.maxConcurrent = options.maxConcurrent || Math.min(os.cpus().length, 8); // Restored to 8 with compressed TIFF
+    this.host = options.host || 'localhost';
+    this.mainServerUrl = options.mainServerUrl || 'http://localhost:3102';
+    this.maxConcurrent = options.maxConcurrent || Math.min(os.cpus().length, 8);
     this.activeConversions = new Map();
     this.conversionQueue = [];
     this.completedConversions = new Set();
     
-    // Optimized VIPS configuration
+    // Configuration from main server
+    this.centralConfig = null;
+    this.heartbeatInterval = null;
+    this.configFetched = false;
+    
+    // Optimized VIPS configuration (will be updated from central config)
     this.vipsConfig = this.setupVipsConfig();
     
     // Express app for API
@@ -32,7 +40,10 @@ class ConversionServer extends EventEmitter {
     this.setupRoutes();
     
     console.log(`\n=== CONVERSION SERVER STARTING ===`);
+    console.log(`🆔 Server ID: ${this.serverId}`);
     console.log(`🔧 Port: ${this.port}`);
+    console.log(`🌐 Host: ${this.host}`);
+    console.log(`🎯 Main Server: ${this.mainServerUrl}`);
     console.log(`⚡ Max Concurrent: ${this.maxConcurrent}`);
     console.log(`💻 CPU Cores: ${os.cpus().length}`);
     console.log(`🧠 Available Memory: ${Math.round(os.totalmem() / 1024 / 1024 / 1024)}GB`);
@@ -59,6 +70,124 @@ class ConversionServer extends EventEmitter {
       // Enable SIMD optimizations
       VIPS_VECTOR: '1'
     };
+  }
+
+  // Fetch configuration from main server
+  async fetchCentralConfig() {
+    try {
+      console.log(`📡 Fetching configuration from main server: ${this.mainServerUrl}/api/conversion-config`);
+      const response = await fetch(`${this.mainServerUrl}/api/conversion-config`);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      this.centralConfig = await response.json();
+      console.log('✅ Successfully fetched central configuration');
+      
+      // Update local configuration with central config
+      this.applyConfiguration();
+      this.configFetched = true;
+      
+      return true;
+    } catch (error) {
+      console.warn(`⚠️  Could not fetch central configuration: ${error.message}`);
+      console.log('📋 Using default configuration');
+      this.configFetched = false;
+      return false;
+    }
+  }
+
+  // Apply central configuration to local settings
+  applyConfiguration() {
+    if (!this.centralConfig) return;
+
+    const { vipsConfig, conversionSettings } = this.centralConfig;
+    
+    // Update VIPS configuration
+    if (vipsConfig) {
+      this.vipsConfig = {
+        ...this.vipsConfig,
+        VIPS_CONCURRENCY: vipsConfig.concurrency || this.vipsConfig.VIPS_CONCURRENCY,
+        VIPS_CACHE_MAX_MEMORY: `${vipsConfig.cacheMemoryGB || 64}g`,
+        VIPS_CACHE_MAX_FILES: vipsConfig.cacheMaxFiles?.toString() || this.vipsConfig.VIPS_CACHE_MAX_FILES,
+        VIPS_VECTOR: vipsConfig.vector ? '1' : '0',
+        VIPS_WARNING: vipsConfig.warning ? '1' : '0'
+      };
+    }
+    
+    // Update conversion settings
+    if (conversionSettings) {
+      this.maxConcurrent = Math.min(conversionSettings.maxConcurrent || this.maxConcurrent, os.cpus().length);
+    }
+    
+    console.log(`🔧 Applied central configuration:`);
+    console.log(`   └─ VIPS Concurrency: ${this.vipsConfig.VIPS_CONCURRENCY}`);
+    console.log(`   └─ VIPS Cache Memory: ${this.vipsConfig.VIPS_CACHE_MAX_MEMORY}`);
+    console.log(`   └─ Max Concurrent: ${this.maxConcurrent}`);
+  }
+
+  // Register with main server
+  async registerWithMainServer() {
+    try {
+      console.log(`📝 Registering with main server: ${this.mainServerUrl}/api/conversion-servers/register`);
+      
+      const registrationData = {
+        id: this.serverId,
+        host: this.host,
+        port: this.port,
+        maxConcurrent: this.maxConcurrent,
+        capabilities: ['icc-transform', 'dzi-generation', 'bigtiff']
+      };
+      
+      const response = await fetch(`${this.mainServerUrl}/api/conversion-servers/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(registrationData)
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      const result = await response.json();
+      console.log(`✅ Successfully registered with main server`);
+      console.log(`   └─ Health check interval: ${result.config?.healthCheckInterval}ms`);
+      
+      // Start heartbeat
+      this.startHeartbeat(result.config?.healthCheckInterval || 10000);
+      
+      return true;
+    } catch (error) {
+      console.warn(`⚠️  Could not register with main server: ${error.message}`);
+      console.log('🔄 Will retry registration periodically');
+      return false;
+    }
+  }
+
+  // Start heartbeat to main server
+  startHeartbeat(interval = 10000) {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+    }
+    
+    this.heartbeatInterval = setInterval(async () => {
+      try {
+        await fetch(`${this.mainServerUrl}/api/conversion-servers/${this.serverId}/heartbeat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            activeConversions: this.activeConversions.size,
+            totalConversions: this.completedConversions.size,
+            status: 'active'
+          })
+        });
+      } catch (error) {
+        console.warn(`💔 Heartbeat failed: ${error.message}`);
+      }
+    }, interval);
+    
+    console.log(`💓 Started heartbeat every ${interval}ms`);
   }
 
   setupRoutes() {
@@ -462,11 +591,19 @@ class ConversionServer extends EventEmitter {
     return 'srgb';
   }
 
-  start() {
+  async start() {
+    // Step 1: Fetch configuration from main server
+    await this.fetchCentralConfig();
+    
+    // Step 2: Start HTTP server
     return new Promise((resolve) => {
-      this.server = this.app.listen(this.port, () => {
+      this.server = this.app.listen(this.port, async () => {
         console.log(`🚀 Conversion Server: http://localhost:${this.port} ✅ RUNNING`);
         console.log(`📊 Ready to process ${this.maxConcurrent} concurrent conversions`);
+        
+        // Step 3: Register with main server
+        await this.registerWithMainServer();
+        
         resolve();
       });
     });

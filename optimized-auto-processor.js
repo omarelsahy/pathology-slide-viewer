@@ -14,10 +14,13 @@ class OptimizedAutoProcessor extends EventEmitter {
     this.processedFiles = new Set();
     this.processingQueue = [];
     
-    // Initialize conversion client
+    // Initialize conversion client with load balancing support
+    this.mainServerUrl = options.mainServerUrl || 'http://localhost:3102';
     this.conversionClient = new ConversionClient({
       url: options.conversionServerUrl || 'http://localhost:3001',
-      pollInterval: 1000
+      pollInterval: 1000,
+      loadBalanced: options.loadBalanced || false,
+      mainServerUrl: this.mainServerUrl
     });
     
     // Forward conversion client events
