@@ -597,6 +597,8 @@ wss.on('connection', (ws) => {
 });
 
 // Backend WS bridge: forward backend conversion_* messages to GUI clients
+let reconnectAttempts = 0;
+
 function ensureBackendWs() {
   try {
     if (backendWs && backendWs.readyState === WebSocket.OPEN) return;
@@ -605,6 +607,7 @@ function ensureBackendWs() {
     backendWs = new WebSocket(url);
     backendWs.on('open', () => {
       console.log('Connected to backend WS:', url);
+      reconnectAttempts = 0; // Reset counter on successful connection
     });
     backendWs.on('message', (msg) => {
       try {
@@ -613,17 +616,21 @@ function ensureBackendWs() {
         if (data && (data.type === 'conversion_progress' || data.type === 'conversion_complete' || data.type === 'conversion_cancelled' || data.type === 'conversion_error' || data.type === 'auto_processing_started' || data.type === 'conversion_started')) {
           console.log('Forwarding backend message to GUI clients:', data.type, data.filename || data.fileName);
           broadcastToClients(data);
-        } else {
-          console.log('Ignoring backend message type:', data.type);
         }
-      } catch (e) { 
+      } catch (e) {
         console.log('Failed to parse backend WS message:', e.message, msg.toString().substring(0, 100));
       }
     });
     backendWs.on('close', (code, reason) => {
-      console.log(`Backend WS closed (code: ${code}, reason: ${reason}), will retry in 2s...`);
+      console.log(`Backend WS closed (code: ${code}, reason: ${reason}), will retry...`);
       backendWs = null; // Clear reference to allow new connection
-      setTimeout(ensureBackendWs, 2000);
+      // Add exponential backoff for reconnection
+      const retryDelay = Math.min(2000 * Math.pow(1.5, reconnectAttempts), 30000);
+      reconnectAttempts++;
+      setTimeout(() => {
+        console.log(`Attempting backend WS reconnection (attempt ${reconnectAttempts})...`);
+        ensureBackendWs();
+      }, retryDelay);
     });
     backendWs.on('error', (err) => {
       console.log('Backend WS error:', err.message, '- URL:', url);

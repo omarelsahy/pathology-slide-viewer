@@ -186,34 +186,26 @@ class ConversionWorker {
 
   async applyICCTransform(inputPath, outputPath, vipsEnv) {
     return new Promise((resolve, reject) => {
-      // Find sRGB profile
-      const sRgbCandidates = [
-        'C\\Windows\\System32\\spool\\drivers\\color\\sRGB Color Space Profile.icm',
-        'C\\Windows\\System32\\spool\\drivers\\color\\sRGB IEC61966-2.1.icm',
-        'C\\Windows\\System32\\spool\\drivers\\color\\sRGB_v4_ICC_preference.icc'
-      ];
-      let chosenProfile = sRgbCandidates.find(p => {
-        try { return fs.existsSync(p); } catch { return false; }
-      });
-      if (!chosenProfile) {
-        // Fallback to libvips built-in sRGB if file not found
-        chosenProfile = 'srgb';
-      }
-
       // Calculate per-worker concurrency to avoid resource contention
       const maxWorkers = 12; // keep in sync with worker pool size
       const perWorkerConcurrency = Math.max(1, Math.floor((vipsEnv.VIPS_CONCURRENCY || 56) / maxWorkers));
 
-      console.log(`ICC Transform command: vips icc_transform "${inputPath}" -> "${outputPath}" (profile: ${chosenProfile}, concurrency: ${perWorkerConcurrency})`);
+      console.log(`ICC Transform command: vips icc_transform "${inputPath}" -> "${outputPath}" (using embedded profile, concurrency: ${perWorkerConcurrency})`);
 
+      // OPTIMIZATION: Use embedded ICC profile directly - much faster and more accurate
       const proc = spawn('vips', [
         'icc_transform',
-        inputPath,
-        outputPath + '[compression=jpeg,Q=95,strip]',
-        chosenProfile,
+        `${inputPath}[access=sequential]`, // Sequential access for memory efficiency
+        outputPath + '[compression=lzw,Q=95,bigtiff=true,strip]', // LZW compression, strip metadata
+        'srgb',     // Target profile: built-in sRGB
+        '--embedded', // Use the slide's embedded ICC profile as SOURCE
         `--vips-concurrency=${perWorkerConcurrency}`,
         '--vips-progress'
       ], { env: vipsEnv });
+
+      // Log verification
+      console.log(` Worker ICC Command: vips icc_transform "${inputPath}" "${outputPath}" srgb --embedded`);
+      console.log(` Using EMBEDDED ICC profile from slide (not Windows system profile)`);
 
       // Track this process for cleanup
       this.activeProcesses.add(proc);

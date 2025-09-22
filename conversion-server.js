@@ -385,40 +385,35 @@ class ConversionServer extends EventEmitter {
     return new Promise((resolve, reject) => {
       const { inputPath, outputBaseName } = conversionState;
       const tempDir = os.tmpdir();
-      const tempPath = path.join(tempDir, `${outputBaseName}_icc_optimized.tif`);
+      // Use compressed TIFF with LZW for intermediate (smaller than uncompressed, faster than JPEG for quality)
+      const tempPath = path.join(tempDir, `${outputBaseName}_icc_temp.tif`);
       
       // Update state
       conversionState.phase = 'ICC Color Transform';
       conversionState.progress = 5;
       
-      // Find optimal sRGB profile
-      const sRgbProfile = this.findOptimalSRGBProfile();
-      
       // Calculate optimal concurrency for this conversion
-      const optimalConcurrency = Math.max(1, Math.floor(this.vipsConfig.VIPS_CONCURRENCY / this.activeConversions.size));
+      const optimalConcurrency = this.activeConversions.size === 1 ? 
+        this.vipsConfig.VIPS_CONCURRENCY : 
+        Math.max(1, Math.floor(this.vipsConfig.VIPS_CONCURRENCY / this.activeConversions.size));
       
       console.log(`ICC Transform: ${path.basename(inputPath)} -> temp (concurrency: ${optimalConcurrency})`);
       
-      // Skip ICC transform if using built-in sRGB or if file is already sRGB
-      if (sRgbProfile === 'srgb') {
-        console.log('Skipping ICC transform - using direct copy for sRGB');
-        // Just copy the file instead of ICC transform
-        fs.copyFileSync(inputPath, tempPath);
-        conversionState.tempPath = tempPath;
-        conversionState.progress = 45;
-        resolve();
-        return;
-      }
-
+      // OPTIMIZATION: Use embedded ICC profile directly instead of Windows system profiles
+      // This is much faster and more accurate for pathology slides
       const args = [
         'icc_transform',
-        inputPath,
-        `${tempPath}[compression=lzw,Q=95,bigtiff=true]`, // Use LZW compression with BigTIFF for >4GB files
-        sRgbProfile,
-        '--embedded=true',
+        `${inputPath}[access=sequential]`, // Sequential access reduces memory usage
+        `${tempPath}[compression=lzw,Q=95,bigtiff=true,strip]`, // LZW compression, strip metadata
+        '--embedded', // Use the slide's embedded ICC profile as SOURCE
+        'srgb',     // Target profile: built-in sRGB
         `--vips-concurrency=${optimalConcurrency}`,
         '--vips-progress'
       ];
+
+      // Log the exact command for verification
+      console.log(`🎨 ICC Transform Command: vips ${args.join(' ')}`);
+      console.log(`✅ Using EMBEDDED ICC profile from slide (not Windows system profile)`);
 
       const env = {
         ...process.env,
@@ -439,6 +434,7 @@ class ConversionServer extends EventEmitter {
           const now = Date.now();
           if (now - lastProgressTime > PROGRESS_THROTTLE) {
             conversionState.progress = Math.min(45, 5 + Math.round(percent * 0.4));
+            console.log(`ICC Transform Progress: ${outputBaseName} - ${conversionState.progress}% (VIPS: ${percent}%)`);
             lastProgressTime = now;
           }
         }
@@ -568,27 +564,6 @@ class ConversionServer extends EventEmitter {
     }
     
     conversionState.progress = 100;
-  }
-
-  findOptimalSRGBProfile() {
-    const candidates = [
-      'C:\\Windows\\System32\\spool\\drivers\\color\\sRGB Color Space Profile.icm',
-      'C:\\Windows\\System32\\spool\\drivers\\color\\sRGB IEC61966-2.1.icm',
-      'C:\\Windows\\System32\\spool\\drivers\\color\\sRGB_v4_ICC_preference.icc'
-    ];
-    
-    for (const profile of candidates) {
-      try {
-        if (fs.existsSync(profile)) {
-          console.log(`Using ICC profile: ${profile}`);
-          return profile;
-        }
-      } catch (e) {}
-    }
-    
-    // Fallback to libvips built-in
-    console.log('Using built-in sRGB profile');
-    return 'srgb';
   }
 
   async start() {

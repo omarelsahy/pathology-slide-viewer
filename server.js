@@ -1454,28 +1454,28 @@ async function performAtomicMove(baseName, convertDir, isAutoConversion = false)
     
     // Move metadata files if they exist
     if (fs.existsSync(stagingMetadataDir)) {
-      if (!fs.existsSync(metadataDir)) {
-        fs.mkdirSync(metadataDir, { recursive: true });
-      }
-      
-      const metadataFiles = fs.readdirSync(stagingMetadataDir);
-      for (const file of metadataFiles) {
-        const srcPath = path.join(stagingMetadataDir, file);
-        const destPath = path.join(metadataDir, file);
-        
-        // Remove existing metadata file if it exists
-        if (fs.existsSync(destPath)) {
+      // OPTIMIZATION: Use bulk folder operations instead of individual file moves
+      if (fs.existsSync(metadataDir)) {
+        try {
+          // Remove existing metadata directory entirely (much faster than individual files)
+          fs.rmSync(metadataDir, { recursive: true, force: true });
+          console.log(`Removed existing metadata directory: ${metadataDir}`);
+        } catch (error) {
+          console.warn(`Failed to remove existing metadata directory: ${error.message}`);
+          // Fallback to rename for cleanup
           try {
-            fs.unlinkSync(destPath);
-            console.log(`Removed existing metadata: ${file}`);
-          } catch (error) {
-            console.warn(`Failed to remove existing metadata ${file}: ${error.message}`);
+            const backupMetadataDir = path.join(config.dziDir, `__delete_metadata_${baseName}_${Date.now()}`);
+            fs.renameSync(metadataDir, backupMetadataDir);
+            console.log(`Renamed existing metadata for cleanup: ${backupMetadataDir}`);
+          } catch (renameError) {
+            console.warn(`Failed to rename existing metadata directory: ${renameError.message}`);
           }
         }
-        
-        fs.renameSync(srcPath, destPath);
-        console.log(`Moved metadata: ${file}`);
       }
+      
+      // Move entire metadata directory at once (much faster than individual files)
+      fs.renameSync(stagingMetadataDir, metadataDir);
+      console.log(`Moved metadata directory: ${stagingMetadataDir} -> ${metadataDir}`);
     }
     
     // Step 2: Clean up staging directory

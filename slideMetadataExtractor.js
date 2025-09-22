@@ -96,8 +96,18 @@ class SlideMetadataExtractor {
 
       if (assoc.includes('macro')) {
         if (fs.existsSync(macroPathCandidate) && fs.statSync(macroPathCandidate).size > 0) {
-          console.log(`Macro image already exists, skipping extraction: ${macroPathCandidate}`);
-          metadata.macro = macroPathCandidate;
+          const existingSize = fs.statSync(macroPathCandidate).size;
+          const existingSizeKB = Math.round(existingSize / 1024);
+          
+          // Re-extract if existing file is too large (old unoptimized extraction)
+          if (existingSize > 100 * 1024) { // 100KB threshold
+            console.log(`Macro image exists but is large (${existingSizeKB} KB), re-extracting with optimization...`);
+            const macroPath = await this.extractMacroImage(slidePath, baseName);
+            metadata.macro = macroPath;
+          } else {
+            console.log(`Macro image already exists and optimized, skipping extraction: ${macroPathCandidate} (${existingSizeKB} KB)`);
+            metadata.macro = macroPathCandidate;
+          }
         } else {
           const macroPath = await this.extractMacroImage(slidePath, baseName);
           metadata.macro = macroPath;
@@ -297,19 +307,39 @@ class SlideMetadataExtractor {
   async extractLabelImage(slidePath, baseName) {
     return new Promise((resolve) => {
       const labelOutputPath = path.join(this.metadataDir, `${baseName}_label.jpg`);
+      const tempPath = path.join(os.tmpdir(), `temp_label_${Date.now()}.tiff`);
       
-      // Try to extract label using VIPS with correct syntax
-      const extractCommand = `vips openslideload "${slidePath}" "${labelOutputPath}" --associated=label`;
+      // Extract label and resize to small thumbnail with high compression
+      // This creates images of just a few KB instead of 12MB
+      const extractCommand = `vips openslideload "${slidePath}" "${tempPath}" --associated=label`;
       
       exec(extractCommand, { timeout: 120_000 }, (extractError, stdout, stderr) => {
-        if (extractError || !fs.existsSync(labelOutputPath)) {
+        if (extractError || !fs.existsSync(tempPath)) {
           console.log(`No label image found in ${path.basename(slidePath)}`);
           if (extractError && stderr) console.log(`label stderr: ${stderr.substring(0, 1000)}`);
           resolve(null);
-        } else {
-          console.log(`Label image extracted: ${labelOutputPath}`);
-          resolve(labelOutputPath);
+          return;
         }
+        
+        // Resize to 50% with moderate compression (creates ~50-150KB files)
+        const resizeCommand = `vips resize "${tempPath}" "${labelOutputPath}[Q=85,optimize_coding,strip]" 0.5`;
+        
+        exec(resizeCommand, { timeout: 60_000 }, (resizeError) => {
+          // Clean up temp file
+          try {
+            if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+          } catch (e) {}
+          
+          if (resizeError || !fs.existsSync(labelOutputPath)) {
+            console.log(`Failed to resize label image for ${path.basename(slidePath)}`);
+            resolve(null);
+          } else {
+            const stats = fs.statSync(labelOutputPath);
+            const sizeKB = Math.round(stats.size / 1024);
+            console.log(`Label image extracted: ${labelOutputPath} (${sizeKB} KB)`);
+            resolve(labelOutputPath);
+          }
+        });
       });
     });
   }
@@ -320,19 +350,39 @@ class SlideMetadataExtractor {
   async extractMacroImage(slidePath, baseName) {
     return new Promise((resolve) => {
       const macroOutputPath = path.join(this.metadataDir, `${baseName}_macro.jpg`);
+      const tempPath = path.join(os.tmpdir(), `temp_macro_${Date.now()}.tiff`);
       
-      // Try to extract macro using VIPS with correct syntax
-      const extractCommand = `vips openslideload "${slidePath}" "${macroOutputPath}" --associated=macro`;
+      // Extract macro and resize to small thumbnail with high compression
+      // This creates images of just a few KB instead of 12MB
+      const extractCommand = `vips openslideload "${slidePath}" "${tempPath}" --associated=macro`;
       
       exec(extractCommand, { timeout: 120_000 }, (extractError, stdout, stderr) => {
-        if (extractError || !fs.existsSync(macroOutputPath)) {
+        if (extractError || !fs.existsSync(tempPath)) {
           console.log(`No macro image found in ${path.basename(slidePath)}`);
           if (extractError && stderr) console.log(`macro stderr: ${stderr.substring(0, 1000)}`);
           resolve(null);
-        } else {
-          console.log(`Macro image extracted: ${macroOutputPath}`);
-          resolve(macroOutputPath);
+          return;
         }
+        
+        // Resize to 50% with moderate compression (creates ~50-150KB files)
+        const resizeCommand = `vips resize "${tempPath}" "${macroOutputPath}[Q=85,optimize_coding,strip]" 0.5`;
+        
+        exec(resizeCommand, { timeout: 60_000 }, (resizeError) => {
+          // Clean up temp file
+          try {
+            if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+          } catch (e) {}
+          
+          if (resizeError || !fs.existsSync(macroOutputPath)) {
+            console.log(`Failed to resize macro image for ${path.basename(slidePath)}`);
+            resolve(null);
+          } else {
+            const stats = fs.statSync(macroOutputPath);
+            const sizeKB = Math.round(stats.size / 1024);
+            console.log(`Macro image extracted: ${macroOutputPath} (${sizeKB} KB)`);
+            resolve(macroOutputPath);
+          }
+        });
       });
     });
   }
