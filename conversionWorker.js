@@ -122,7 +122,7 @@ class ConversionWorker {
       // Check file accessibility with retry mechanism
       await this.waitForFileAccess();
       
-      const tempDir = require('os').tmpdir();
+      const tempDir = this.config.tempDir || require('os').tmpdir();
       const tempPath = path.join(tempDir, `${this.baseName}_icc_temp.tif`);
   
       await this.applyICCTransform(this.svsPath, tempPath, this.vipsEnv);

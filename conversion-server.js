@@ -257,11 +257,21 @@ class ConversionServer extends EventEmitter {
       
       const active = this.activeConversions.get(basename);
       if (active) {
+        const now = Date.now();
+        const totalElapsed = now - active.startedAt;
+        const iccElapsed = active.iccStartTime ? now - active.iccStartTime : 0;
+        
         return res.json({
           status: 'processing',
           progress: active.progress || 0,
           phase: active.phase || 'Starting',
-          startedAt: active.startedAt
+          startedAt: active.startedAt,
+          totalElapsedMs: totalElapsed,
+          totalElapsedSec: Math.round(totalElapsed / 1000),
+          iccElapsedMs: iccElapsed,
+          iccElapsedSec: Math.round(iccElapsed / 1000),
+          iccDuration: active.iccDuration,
+          lastUpdate: active.lastUpdate || active.startedAt
         });
       }
       
@@ -384,13 +394,37 @@ class ConversionServer extends EventEmitter {
   async performICCTransform(conversionState) {
     return new Promise((resolve, reject) => {
       const { inputPath, outputBaseName } = conversionState;
-      const tempDir = os.tmpdir();
-      // Use compressed TIFF with LZW for intermediate (smaller than uncompressed, faster than JPEG for quality)
-      const tempPath = path.join(tempDir, `${outputBaseName}_icc_temp.tif`);
+      const tempDir = this.centralConfig?.storage?.tempDir || os.tmpdir();
       
-      // Update state
+      // Get ICC configuration settings
+      const iccConfig = this.centralConfig?.conversion?.icc || {
+        intermediateFormat: 'tif',
+        compression: 'lzw',
+        quality: 95,
+        useVipsNative: false
+      };
+      
+      // Determine intermediate file format and path
+      let tempPath, outputFormat;
+      if (iccConfig.useVipsNative || iccConfig.intermediateFormat === 'v') {
+        // Use VIPS native format (.v) - fastest I/O, largest files
+        tempPath = path.join(tempDir, `${outputBaseName}_icc_temp.v`);
+        outputFormat = ''; // No format specifier needed for .v files
+        console.log(`🚀 Using VIPS native format (.v) for maximum I/O speed`);
+      } else {
+        // Use compressed TIFF (smaller files, slightly slower I/O)
+        tempPath = path.join(tempDir, `${outputBaseName}_icc_temp.tif`);
+        const compression = iccConfig.compression || 'lzw';
+        const quality = iccConfig.quality || 95;
+        outputFormat = `[compression=${compression},Q=${quality},bigtiff=true,strip]`;
+        console.log(`💾 Using compressed TIFF format with ${compression} compression`);
+      }
+      
+      // Update state with server-side timing
       conversionState.phase = 'ICC Color Transform';
       conversionState.progress = 5;
+      conversionState.iccStartTime = Date.now();
+      conversionState.lastUpdate = Date.now();
       
       // Calculate optimal concurrency for this conversion
       const optimalConcurrency = this.activeConversions.size === 1 ? 
@@ -404,7 +438,7 @@ class ConversionServer extends EventEmitter {
       const args = [
         'icc_transform',
         `${inputPath}[access=sequential]`, // Sequential access reduces memory usage
-        `${tempPath}[compression=lzw,Q=95,bigtiff=true,strip]`, // LZW compression, strip metadata
+        `${tempPath}${outputFormat}`, // Dynamic format based on configuration
         '--embedded', // Use the slide's embedded ICC profile as SOURCE
         'srgb',     // Target profile: built-in sRGB
         `--vips-concurrency=${optimalConcurrency}`,
@@ -414,6 +448,7 @@ class ConversionServer extends EventEmitter {
       // Log the exact command for verification
       console.log(`🎨 ICC Transform Command: vips ${args.join(' ')}`);
       console.log(`✅ Using EMBEDDED ICC profile from slide (not Windows system profile)`);
+      console.log(`📁 Temp file: ${path.basename(tempPath)} (${iccConfig.useVipsNative || iccConfig.intermediateFormat === 'v' ? 'VIPS native' : 'compressed TIFF'})`);
 
       const env = {
         ...process.env,
@@ -447,8 +482,11 @@ class ConversionServer extends EventEmitter {
       });
 
       proc.on('close', (code) => {
+        const iccDuration = Date.now() - conversionState.iccStartTime;
         if (code === 0) {
           conversionState.tempPath = tempPath;
+          conversionState.iccDuration = iccDuration;
+          console.log(`✅ ICC Transform completed in ${(iccDuration/1000).toFixed(1)}s for ${outputBaseName}`);
           resolve();
         } else {
           // Clean up temp file on failure

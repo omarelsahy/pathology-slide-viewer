@@ -77,6 +77,15 @@ const corsOptions = config.isServerMode()
 app.use(cors(corsOptions));
 app.use(express.json());
 
+// Serve GUI (management console) static assets
+app.use('/gui', express.static(path.join(__dirname, 'gui-web')));
+
+// Serve configuration interface directly at /config
+app.use('/config', express.static(path.join(__dirname, 'gui-web')));
+app.get('/config', (req, res) => {
+  res.sendFile(path.join(__dirname, 'gui-web', 'index.html'));
+});
+
 // API Authentication middleware for server mode
 if (config.isServerMode()) {
   app.use('/api/v1', (req, res, next) => {
@@ -2007,6 +2016,17 @@ app.get('/api/conversion-config', (req, res) => {
       bigtiff: pathologyConfig.conversion?.vips?.bigtiff !== false,
       vector: pathologyConfig.conversion?.vips?.vector !== false,
       warning: pathologyConfig.conversion?.vips?.warning === true
+    },
+    // Expose ICC/intermediate format settings so conversion server can decide
+    // between VIPS .v (fast, larger temp) and compressed TIFF (smaller, slower IO)
+    icc: {
+      intermediateFormat: pathologyConfig.conversion?.icc?.useVipsFormat ? 'v' : (pathologyConfig.conversion?.icc?.intermediateFormat || 'tif'),
+      compression: pathologyConfig.conversion?.icc?.compression || 'lzw',
+      quality: pathologyConfig.conversion?.icc?.quality || 95,
+      useVipsNative: pathologyConfig.conversion?.icc?.useVipsNative || false,
+      useVipsFormat: pathologyConfig.conversion?.icc?.useVipsFormat || false,
+      useRamDisk: pathologyConfig.conversion?.icc?.useRamDisk || false,
+      ramDiskSizeGB: pathologyConfig.conversion?.icc?.ramDiskSizeGB || 20
     },
     conversionSettings: {
       maxConcurrent: pathologyConfig.conversion?.defaultConcurrency || Math.min(totalCores, 8),

@@ -14,17 +14,16 @@
   "conversion": {
     "defaultConcurrency": 8,
     "vips": {
-      "concurrency": 56,
-      "cacheMemoryGB": 80,
+      "concurrency": 8,
+      "cacheMemoryGB": 32,
       "quality": 95,
       "compression": "lzw"
     },
     "icc": {
       "intermediateFormat": "v",
-      "compression": "lzw",
-      "quality": 95,
-      "useVipsNative": true,
-      "useVipsFormat": true
+      "compression": "none",
+      "quality": 100,
+      "useVipsNative": true
     },
     "dzi": {
       "overlap": 1,

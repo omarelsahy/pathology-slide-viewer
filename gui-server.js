@@ -31,9 +31,10 @@ function detectServiceMode() {
 
 detectServiceMode();
 let guiConfig = {
-  // Folder paths
-  sourceDir: path.join(__dirname, 'public', 'slides'),
-  destinationDir: path.join(__dirname, 'public', 'dzi'),
+  // Folder paths - default to E: drive for better performance
+  sourceDir: 'E:\\OG',
+  destinationDir: 'E:\\dzi',
+  tempDir: 'E:\\temp',
   
   // VIPS Configuration
   vipsSettings: {
@@ -139,6 +140,49 @@ app.post('/api/import', upload.array('slides'), async (req, res) => {
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// Browse directories
+app.get('/api/browse', (req, res) => {
+  const { path: dirPath } = req.query;
+  try {
+    const startPath = dirPath || 'C:\\';
+    
+    if (!fs.existsSync(startPath)) {
+      return res.status(400).json({ error: 'Path does not exist' });
+    }
+    
+    const stats = fs.statSync(startPath);
+    if (!stats.isDirectory()) {
+      return res.status(400).json({ error: 'Path is not a directory' });
+    }
+    
+    const items = fs.readdirSync(startPath, { withFileTypes: true })
+      .filter(item => item.isDirectory())
+      .map(item => ({
+        name: item.name,
+        path: path.join(startPath, item.name),
+        type: 'directory'
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    
+    // Add parent directory if not at root
+    const parentPath = path.dirname(startPath);
+    if (parentPath !== startPath) {
+      items.unshift({
+        name: '..',
+        path: parentPath,
+        type: 'parent'
+      });
+    }
+    
+    res.json({
+      currentPath: startPath,
+      items: items
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 

@@ -4,14 +4,21 @@
 let currentConfig = {};
 let slides = [];
 let ws = null;
-let backendHealthy = false;
-
 // DOM Elements - will be initialized after DOM loads
 let elements = {};
 
+// ===== API BASE (GUI on 3003 -> Main server on 3102) =====
+function getApiBase() {
+    // When served from backend /config route, API calls are direct
+    return '';
+}
+function setApiBase(newBase) {
+    // No-op when using direct backend access
+}
+
 // Initialize DOM elements after DOM is loaded
 function initializeElements() {
-    console.log('🎯 Initializing DOM elements...');
+    console.log('Initializing DOM elements...');
     elements = {
         // Server controls
         guiIndicator: document.getElementById('guiIndicator'),
@@ -135,6 +142,56 @@ function initializeElements() {
     });
 }
 
+// Dynamically inject the ICC intermediate format toggle into the VIPS tab
+function ensureIccFormatTogglePresent() {
+    try {
+        // Find the compression select and insert after its parent .form-group
+        const compressionSelect = document.getElementById('vipsCompression');
+        if (!compressionSelect) {
+            console.log('🔧 Debug - vipsCompression not found, retrying in 1s...');
+            setTimeout(ensureIccFormatTogglePresent, 1000);
+            return;
+        }
+        const formGroup = compressionSelect.closest('.form-group');
+        if (!formGroup) return;
+
+        // Avoid duplicate insertion
+        if (document.getElementById('useVipsFormat')) {
+            console.log('🔧 Debug - useVipsFormat checkbox already exists');
+            return;
+        }
+
+        const container = document.createElement('div');
+        container.className = 'form-group';
+        container.innerHTML = `
+            <label style="display:flex; align-items:center; gap:8px;">
+                <input type="checkbox" id="useVipsFormat">
+                Use VIPS .v as intermediate format (faster I/O, larger temp files)
+            </label>
+            <div class="help-text" style="font-size:11px; color:#bbb; margin-top:6px;">
+                When enabled, ICC intermediates are written as .v (no compression). When disabled, compressed TIFF (.tif) is used.
+            </div>
+        `;
+
+        // Insert after compression form-group
+        formGroup.parentNode.insertBefore(container, formGroup.nextSibling);
+        console.log('🔧 Debug - ICC format toggle injected successfully');
+
+        // Hook change to preview update
+        const chk = container.querySelector('#useVipsFormat');
+        if (chk) {
+            chk.addEventListener('change', () => {
+                console.log('🔧 Debug - useVipsFormat changed to:', chk.checked);
+            });
+        }
+        
+        // Load current state from config
+        updateConfigurationUI();
+    } catch (e) {
+        console.warn('Failed to inject ICC format toggle:', e.message);
+    }
+}
+
 // Rename slide function
 async function renameSlide(currentName, filename) {
     const newName = prompt(`Rename slide "${currentName}":`, currentName);
@@ -185,6 +242,8 @@ async function init() {
         
         console.log('🎨 Updating configuration UI...');
         updateConfigurationUI();
+        // Ensure the ICC toggle exists in the VIPS tab
+        ensureIccFormatTogglePresent();
         
         console.log('🎛️ Setting up event listeners...');
         setupEventListeners();
@@ -915,7 +974,7 @@ function forceResetAllCancelButtons() {
 async function loadConfig() {
     try {
         // Try to load legacy config first, but don't fail if it doesn't exist
-        const response = await fetch('http://localhost:3102/api/config');
+        const response = await fetch('/api/config');
         if (response.ok) {
             currentConfig = await response.json();
             updateUIFromConfig();
@@ -1150,7 +1209,7 @@ async function stopServer() {
 function startBackendHealthPolling() {
     const poll = async () => {
         try {
-            const res = await fetch('http://localhost:3102/api/slides');
+            const res = await fetch('/api/slides');
             const ok = res.ok;
             if (ok !== backendHealthy) {
                 backendHealthy = ok;
@@ -1177,7 +1236,7 @@ async function scanSlides() {
     console.log('🔍 scanSlides() called');
     try {
         console.log('📡 Fetching slides from backend...');
-        const response = await fetch('http://localhost:3102/api/slides');
+        const response = await fetch('/api/slides');
         console.log('📡 Response received:', response.status, response.statusText);
         
         if (!response.ok) {
@@ -1287,7 +1346,7 @@ function renderSlides() {
         
         card.innerHTML = `
             <div class="slide-name">${slide.name}</div>
-            ${slide.thumbnailUrl || slide.labelUrl || slide.macroUrl ? `<div class="slide-thumbnail" style="margin-top: 4px;"><img src="${slide.thumbnailUrl || slide.labelUrl || slide.macroUrl}" alt="Slide thumbnail" style="max-width: 100%; max-height: 80px; border-radius: 4px; border: 1px solid #ddd;" onerror="this.style.display='none'"></div>` : ''}
+            ${slide.labelUrl || slide.thumbnailUrl || slide.macroUrl ? `<div class="slide-thumbnail" style="margin-top: 4px;"><img src="${slide.labelUrl || slide.thumbnailUrl || slide.macroUrl}" alt="Slide thumbnail" style="max-width: 100%; max-height: 150px; border-radius: 4px; border: 1px solid #ddd;" onerror="this.style.display='none'"></div>` : ''}
             ${slide.label ? `<div class="slide-label" style="font-size: 11px; color: #6c757d; font-style: italic; margin-top: 2px;">${slide.label}</div>` : ''}
             <div class="slide-info">
                 Format: ${slide.format.toUpperCase()}<br>
@@ -1392,6 +1451,10 @@ async function convertSlide(filename) {
         const result = await response.json();
         appendToConsole(`File touched, autoprocessor will detect and convert: ${result.status || 'triggered'}\n`, 'info');
         
+        // Track this conversion for enhanced monitoring
+        const basename = filename.replace(/\.[^/.]+$/, ''); // Remove extension
+        trackConversion(basename);
+        
         // Update button states and show progress
         const safeFilename = filename.replace(/[^a-zA-Z0-9]/g, '_');
         const convertBtn = document.querySelector(`.convert-btn-${safeFilename}`);
@@ -1482,7 +1545,7 @@ async function deleteSlide(filename) {
         appendToConsole(`Deleting slide: ${filename}...\n`, 'info');
         
         // Send delete request directly to backend server instead of using GUI-server proxy
-        const backendUrl = `http://localhost:3102/api/slides/${encodeURIComponent(filename)}`;
+        const backendUrl = `/api/slides/${encodeURIComponent(filename)}`;
         const response = await fetch(backendUrl, {
             method: 'DELETE'
         });
@@ -1521,7 +1584,7 @@ window.debugScanSlides = async function() {
 // Debug function to test backend connection
 window.debugBackend = async function() {
     try {
-        const response = await fetch('http://localhost:3102/api/slides');
+        const response = await fetch('/api/slides');
         console.log('Backend response:', response.status, response.statusText);
         if (response.ok) {
             const data = await response.json();
@@ -1564,6 +1627,12 @@ window.debugConfig = function() {
     console.log('Sample form elements:');
     console.log('- deploymentMode element:', elements.deploymentMode);
     console.log('- deploymentMode value:', elements.deploymentMode?.value);
+    
+    // Debug ICC checkbox
+    const useVipsCheckbox = document.getElementById('useVipsFormat');
+    console.log('- useVipsFormat checkbox:', useVipsCheckbox);
+    console.log('- useVipsFormat checked:', useVipsCheckbox?.checked);
+    console.log('- API base:', getApiBase());
     console.log('- slidesDir element:', elements.slidesDir);
     console.log('- slidesDir textContent:', elements.slidesDir?.textContent);
     console.log('- vipsConcurrency element:', elements.vipsConcurrency);
@@ -1845,7 +1914,7 @@ function formatElapsed(ms) {
 async function updateServerStatus() {
     try {
         // Test backend connectivity
-        const response = await fetch('http://localhost:3102/api/slides');
+        const response = await fetch('/api/slides');
         if (response.ok) {
             console.log('Backend server is accessible');
             // Update any status indicators if they exist
@@ -1875,6 +1944,35 @@ document.addEventListener('DOMContentLoaded', () => {
     setInterval(updateServerStatus, 5000);
 });
 
+// Manual function to test saving ICC settings
+window.testSaveICC = function() {
+    console.log('🔧 Testing ICC save...');
+    const useVipsCheckbox = document.getElementById('useVipsFormat');
+    if (useVipsCheckbox) {
+        useVipsCheckbox.checked = !useVipsCheckbox.checked;
+        console.log('Toggled checkbox to:', useVipsCheckbox.checked);
+        savePathologyConfig();
+    } else {
+        console.error('useVipsFormat checkbox not found!');
+        ensureIccFormatTogglePresent();
+    }
+};
+
+// Manual function to test tab switching
+window.testTabSwitch = function(tabName = 'vips') {
+    console.log('🔧 Testing tab switch to:', tabName);
+    const tabBtn = document.querySelector(`[data-tab="${tabName}"]`);
+    console.log('Tab button found:', tabBtn);
+    if (tabBtn) {
+        tabBtn.click();
+    } else {
+        console.error('Tab button not found for:', tabName);
+        // List all available tab buttons
+        const allTabs = document.querySelectorAll('[data-tab]');
+        console.log('Available tabs:', Array.from(allTabs).map(t => t.getAttribute('data-tab')));
+    }
+};
+
 // ===== CONFIGURATION MANAGEMENT =====
 
 let pathologyConfig = {};
@@ -1883,7 +1981,7 @@ let pathologyConfig = {};
 async function loadPathologyConfig() {
     try {
         console.log('Loading pathology configuration from backend...');
-        const response = await fetch('http://localhost:3102/api/pathology-config');
+        const response = await fetch(`${getApiBase()}/api/pathology-config`);
         if (response.ok) {
             const data = await response.json();
             pathologyConfig = data.config;
@@ -1922,12 +2020,22 @@ function updateConfigurationUI() {
     }
     if (elements.slidesDir && pathologyConfig.storage?.slidesDir) {
         elements.slidesDir.textContent = pathologyConfig.storage.slidesDir;
+        console.log('🎨 Set slidesDir to:', pathologyConfig.storage.slidesDir);
     }
     if (elements.dziDir && pathologyConfig.storage?.dziDir) {
         elements.dziDir.textContent = pathologyConfig.storage.dziDir;
+        console.log('🎨 Set dziDir to:', pathologyConfig.storage.dziDir);
     }
     if (elements.tempDir && pathologyConfig.storage?.tempDir) {
         elements.tempDir.textContent = pathologyConfig.storage.tempDir;
+        console.log('🎨 Set tempDir to:', pathologyConfig.storage.tempDir);
+    }
+    
+    // Also update legacy config for backward compatibility
+    if (pathologyConfig.storage) {
+        currentConfig.sourceDir = pathologyConfig.storage.slidesDir;
+        currentConfig.destinationDir = pathologyConfig.storage.dziDir;
+        updateUIFromConfig();
     }
     if (elements.autoProcessorEnabled && pathologyConfig.autoProcessor?.enabled !== undefined) {
         elements.autoProcessorEnabled.checked = pathologyConfig.autoProcessor.enabled;
@@ -1948,6 +2056,16 @@ function updateConfigurationUI() {
     }
     if (elements.vipsCompression && pathologyConfig.conversion?.vips?.compression) {
         elements.vipsCompression.value = pathologyConfig.conversion.vips.compression;
+    }
+    // ICC Intermediate format toggle (injected)
+    const useVipsToggle = document.getElementById('useVipsFormat');
+    if (useVipsToggle) {
+        const icc = pathologyConfig.conversion?.icc || {};
+        const shouldCheck = !!icc.useVipsFormat || icc.intermediateFormat === 'v';
+        useVipsToggle.checked = shouldCheck;
+        console.log('🔧 Debug - Set useVipsFormat checkbox to:', shouldCheck, 'based on config:', icc);
+    } else {
+        console.log('🔧 Debug - useVipsFormat checkbox not found during config update');
     }
 }
 
@@ -2013,6 +2131,99 @@ function setupConfigurationTabs() {
     if (elements.refreshServersBtn) {
         elements.refreshServersBtn.addEventListener('click', refreshServersList);
     }
+    
+    // Setup directory browse buttons
+    setupBrowseButtons();
+    
+    // Load GUI configuration to show current paths
+    loadGuiConfig();
+    
+    // Start enhanced conversion monitoring
+    startConversionMonitoring();
+}
+
+// Enhanced conversion status monitoring with server-side timing
+let conversionPollingInterval = null;
+let activeConversions = new Set();
+
+function startConversionMonitoring() {
+    if (conversionPollingInterval) {
+        clearInterval(conversionPollingInterval);
+    }
+    
+    // Poll every 2 seconds for active conversions
+    conversionPollingInterval = setInterval(async () => {
+        if (activeConversions.size > 0) {
+            for (const basename of activeConversions) {
+                await pollConversionStatus(basename);
+            }
+        }
+    }, 2000);
+}
+
+async function pollConversionStatus(basename) {
+    try {
+        const response = await fetch(`http://localhost:3001/status/${basename}`);
+        if (response.ok) {
+            const status = await response.json();
+            updateConversionDisplay(basename, status);
+            
+            if (status.status === 'completed' || status.status === 'failed') {
+                activeConversions.delete(basename);
+            }
+        }
+    } catch (error) {
+        console.error(`Failed to poll conversion status for ${basename}:`, error);
+    }
+}
+
+function updateConversionDisplay(basename, status) {
+    const progressPanel = document.getElementById('progressPanel');
+    if (!progressPanel) return;
+    
+    if (status.status === 'processing') {
+        progressPanel.style.display = 'block';
+        
+        // Update progress elements with server-side timing
+        const fileEl = document.getElementById('progressFile');
+        const tilesEl = document.getElementById('progressTiles');
+        const elapsedEl = document.getElementById('progressElapsed');
+        const rateEl = document.getElementById('progressRate');
+        const statusEl = document.getElementById('progressStatus');
+        
+        if (fileEl) fileEl.textContent = basename;
+        if (tilesEl) tilesEl.textContent = status.progress || 0;
+        if (elapsedEl) elapsedEl.textContent = formatElapsedTime(status.totalElapsedSec || 0);
+        if (rateEl) rateEl.textContent = calculateRate(status.progress, status.totalElapsedSec);
+        if (statusEl) {
+            let statusText = status.phase || 'Processing';
+            if (status.phase === 'ICC Color Transform' && status.iccElapsedSec > 0) {
+                statusText += ` (${status.iccElapsedSec}s)`;
+            }
+            statusEl.textContent = statusText;
+        }
+    } else if (status.status === 'completed') {
+        setTimeout(() => {
+            progressPanel.style.display = 'none';
+            scanSlides(); // Refresh slides list
+        }, 2000);
+    }
+}
+
+function formatElapsedTime(seconds) {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+}
+
+function calculateRate(progress, elapsedSec) {
+    if (elapsedSec === 0) return '0';
+    return (progress / elapsedSec).toFixed(1);
+}
+
+// Hook into existing conversion start to track active conversions
+function trackConversion(basename) {
+    activeConversions.add(basename);
 }
 
 // Switch configuration tab
@@ -2039,6 +2250,11 @@ async function savePathologyConfig() {
     try {
         showMessage('Saving configuration...', 'info');
         
+        // Debug: Check if the checkbox exists and its state
+        const useVipsCheckbox = document.getElementById('useVipsFormat');
+        console.log('🔧 Debug - useVipsFormat checkbox:', useVipsCheckbox);
+        console.log('🔧 Debug - useVipsFormat checked:', useVipsCheckbox?.checked);
+        
         const updatedConfig = {
             deployment: {
                 mode: elements.deploymentMode?.value || 'single',
@@ -2063,6 +2279,14 @@ async function savePathologyConfig() {
                     quality: parseInt(elements.vipsQuality?.value) || 95,
                     compression: elements.vipsCompression?.value || 'lzw'
                 },
+                icc: {
+                    // New ICC intermediate format settings controlled from VIPS tab
+                    useVipsFormat: !!useVipsCheckbox?.checked,
+                    useVipsNative: !!useVipsCheckbox?.checked,
+                    intermediateFormat: (!!useVipsCheckbox?.checked) ? 'v' : 'tif',
+                    compression: elements.vipsCompression?.value || 'lzw',
+                    quality: parseInt(elements.vipsQuality?.value) || 95
+                },
                 dzi: {
                     overlap: parseInt(elements.overlap?.value) || 1,
                     layout: elements.layout?.value || 'dz',
@@ -2076,7 +2300,9 @@ async function savePathologyConfig() {
             }
         };
         
-        const response = await fetch('http://localhost:3102/api/pathology-config', {
+        console.log('🔧 Debug - Saving config with ICC settings:', updatedConfig.conversion.icc);
+        
+        const response = await fetch(`${getApiBase()}/api/pathology-config`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(updatedConfig)
@@ -2085,7 +2311,7 @@ async function savePathologyConfig() {
         if (response.ok) {
             const result = await response.json();
             pathologyConfig = result.config;
-            showMessage('Configuration saved successfully!', 'success');
+            showMessage(`Configuration saved successfully! ICC format: ${updatedConfig.conversion.icc.intermediateFormat}`, 'success');
         } else {
             const error = await response.json();
             showMessage(`Failed to save configuration: ${error.error}`, 'error');
@@ -2099,7 +2325,7 @@ async function savePathologyConfig() {
 // Reload pathology configuration
 async function reloadPathologyConfig() {
     try {
-        const response = await fetch('http://localhost:3102/api/pathology-config/reload', {
+        const response = await fetch(`${getApiBase()}/api/pathology-config/reload`, {
             method: 'POST'
         });
         
@@ -2141,7 +2367,7 @@ async function validatePathologyConfig() {
             }
         };
         
-        const response = await fetch('http://localhost:3102/api/pathology-config/validate', {
+        const response = await fetch(`${getApiBase()}/api/pathology-config/validate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(configToValidate)
@@ -2345,4 +2571,50 @@ async function removeServer(serverId) {
 // Configure server (placeholder)
 function configureServer(serverId) {
     alert(`Server configuration for "${serverId}" - Feature coming soon!`);
+}
+
+// Directory browsing
+function setupBrowseButtons() {
+    document.getElementById('selectSlidesBtn').onclick = () => browseDirectory('slidesDir', 'sourceDir');
+    document.getElementById('selectDziBtn').onclick = () => browseDirectory('dziDir', 'destinationDir');
+    document.getElementById('selectTempBtn').onclick = () => browseDirectory('tempDir', 'tempDir');
+}
+
+function browseDirectory(displayElementId, configField) {
+    const path = prompt('Enter directory path:', document.getElementById(displayElementId).textContent);
+    if (path) {
+        document.getElementById(displayElementId).textContent = path;
+        updateConfig({[configField]: path});
+    }
+}
+
+async function updateConfig(updates) {
+    try {
+        const response = await fetch('/api/config', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(updates)
+        });
+        if (response.ok) {
+            showMessage('Configuration updated!', 'success');
+            await loadGuiConfig(); // Reload to show updated paths
+        }
+    } catch (error) {
+        showMessage('Failed to update configuration', 'error');
+    }
+}
+
+async function loadGuiConfig() {
+    try {
+        const response = await fetch('/api/config');
+        if (response.ok) {
+            const config = await response.json();
+            // Update directory displays
+            if (config.sourceDir) document.getElementById('slidesDir').textContent = config.sourceDir;
+            if (config.destinationDir) document.getElementById('dziDir').textContent = config.destinationDir;
+            if (config.tempDir) document.getElementById('tempDir').textContent = config.tempDir;
+        }
+    } catch (error) {
+        console.error('Failed to load GUI config:', error);
+    }
 }

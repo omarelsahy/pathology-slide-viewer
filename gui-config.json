@@ -1,6 +1,7 @@
 {
-  "sourceDir": "C:\\OG",
-  "destinationDir": "C:\\dzi",
+  "sourceDir": "E:\\OG",
+  "destinationDir": "E:\\dzi",
+  "tempDir": "E:\\temp",
   "vipsSettings": {
     "concurrency": 16,
     "maxMemoryMB": 52390,

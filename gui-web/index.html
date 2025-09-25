@@ -48,6 +48,17 @@
             margin-left: auto;
         }
 
+        .header .link-btn {
+            background: #007acc;
+            color: #fff;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .header .link-btn:hover { background:#005a9e; }
+
         .server-connections {
             display: flex;
             gap: 12px;
@@ -571,6 +582,7 @@
     <div class="container">
         <div class="header">
             <h1>Pathology Slide Viewer - Management Console</h1>
+            <a href="config.html" target="_blank" class="link-btn" title="Open I/O Configuration">I/O Config</a>
             <div class="server-status">
                 <div class="server-connections">
                     <div class="connection-item">

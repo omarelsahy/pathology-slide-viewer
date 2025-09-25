@@ -97,10 +97,10 @@ class AutoProcessor extends EventEmitter {
       return;
     }
 
-    // CRITICAL FIX: Check if file was already processed OR is currently being processed
-    if (this.processedFiles.has(filePath)) {
-      return;
-    }
+    // Skip memory check - allow reprocessing of files that may have been deleted and reintroduced
+    // if (this.processedFiles.has(filePath)) {
+    //   return;
+    // }
 
     // Generate unique name for files in subfolders to avoid conflicts
     const relativePath = path.relative(this.slidesDir, path.dirname(filePath));
@@ -113,7 +113,6 @@ class AutoProcessor extends EventEmitter {
     
     if (fs.existsSync(dziPath)) {
       console.log(`Skipping ${fileName} - DZI already exists`);
-      this.processedFiles.add(filePath);
       return;
     }
 
@@ -121,8 +120,6 @@ class AutoProcessor extends EventEmitter {
     const workerStatus = this.workerPool.getStatus();
     if (workerStatus.processingFiles.includes(fileName) || workerStatus.processingFiles.includes(uniqueName)) {
       console.log(`Skipping ${fileName} - already being processed by worker`);
-      // Mark as processed to prevent future re-triggers during conversion
-      this.processedFiles.add(filePath);
       return;
     }
 
@@ -132,8 +129,6 @@ class AutoProcessor extends EventEmitter {
     );
     if (alreadyQueued) {
       console.log(`Skipping ${fileName} - already in queue`);
-      // Mark as processed to prevent future re-triggers
-      this.processedFiles.add(filePath);
       return;
     }
 
@@ -162,8 +157,8 @@ class AutoProcessor extends EventEmitter {
     console.log(`Format: ${fileExt}`);
     console.log(`========================\n`);
 
-    // Mark as processed immediately to prevent duplicate triggers
-    this.processedFiles.add(filePath);
+    // Don't mark as processed - allow reprocessing if files are deleted and reintroduced
+    // this.processedFiles.add(filePath);
 
     // Add to processing queue
     this.addToQueue({
