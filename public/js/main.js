@@ -24,10 +24,37 @@ document.addEventListener('DOMContentLoaded', function() {
     let currentSortBy = 'name';
     const selectedSlides = new Set();
 
-    // Backend host configuration
-    function getBackendHost() {
-        return localStorage.getItem('backendHost') || window.location.hostname || 'localhost';
+    // Backend base configuration (supports full URL like https://path2.slidelis.com)
+    function getDefaultBackendBase() {
+        const host = window.location.hostname || 'localhost';
+        return `http://${host}:3101`;
     }
+    function getBackendBase() {
+        return (localStorage.getItem('backendBase') || getDefaultBackendBase()).replace(/\/$/, '');
+    }
+    function setBackendBase(url) {
+        try {
+            const cleaned = (url || '').trim().replace(/\/$/, '');
+            // Basic validation
+            const _ = new URL(cleaned.startsWith('http') ? cleaned : `https://${cleaned}`);
+            localStorage.setItem('backendBase', _.origin);
+        } catch (_) {
+            alert('Please enter a valid URL, e.g. https://path2.slidelis.com');
+        }
+    }
+    function getApiBase() { return getBackendBase(); }
+    function getWsUrl() {
+        try {
+            const u = new URL(getBackendBase());
+            const wsProto = (u.protocol === 'https:') ? 'wss:' : 'ws:';
+            return `${wsProto}//${u.host}`;
+        } catch (_) {
+            // Fallback to previous behavior
+            const host = window.location.hostname || 'localhost';
+            return `ws://${host}:3101`;
+        }
+    }
+    let API_BASE = getApiBase();
 
     // Show/hide bulk actions based on current selection
     function updateBulkActions() {
@@ -73,34 +100,6 @@ document.addEventListener('DOMContentLoaded', function() {
             loadSlides();
         };
     }
-    function setBackendHost(host) {
-        localStorage.setItem('backendHost', host);
-    }
-    function getApiBase() { return `http://${getBackendHost()}:3101`; }
-    function getWsUrl() { return `ws://${getBackendHost()}:3101`; }
-    let API_BASE = getApiBase();
-
-    // Simple helper to get or create a progress bar inside a slide item
-    function getOrCreateProgressBar(slideName) {
-        const item = document.querySelector(`[data-slide-name="${slideName}"]`);
-        if (!item) return null;
-        let prog = item.querySelector('.convert-progress');
-        if (!prog) {
-            prog = document.createElement('div');
-            prog.className = 'convert-progress';
-            prog.style.cssText = 'margin-top:8px;background:#eee;border-radius:4px;height:8px;position:relative;overflow:hidden;';
-            const bar = document.createElement('div');
-            bar.className = 'convert-progress-bar';
-            bar.style.cssText = 'position:absolute;left:0;top:0;height:100%;width:0%;background:#28a745;transition:width 0.3s;';
-            const label = document.createElement('div');
-            label.className = 'convert-progress-label';
-            label.style.cssText = 'margin-top:4px;font-size:12px;color:#555;';
-            prog.appendChild(bar);
-            item.appendChild(prog);
-            item.appendChild(label);
-        }
-        return prog;
-    }
 
     // Load available slides
     async function loadSlides() {
@@ -115,18 +114,18 @@ document.addEventListener('DOMContentLoaded', function() {
             updateSlideList();
         } catch (error) {
             console.error('Error loading slides:', error);
-            const currentHost = getBackendHost();
+            const currentBase = getBackendBase();
             slideList.innerHTML = `
                 <div style="padding: 15px; color: #dc3545;">
-                    Error loading slides from <b>${API_BASE}</b>.<br/>
-                    Ensure the backend is reachable at port 3101.
+                    Error loading slides from <b>${currentBase}</b>.<br/>
+                    Ensure the backend is reachable.
                 </div>
             `;
-            ensureBackendHostControls(currentHost);
+            ensureBackendHostControls(currentBase);
         }
     }
 
-    function ensureBackendHostControls(currentHost) {
+    function ensureBackendHostControls(currentBase) {
         if (!slideControls) return;
         if (document.getElementById('backend-host-controls')) return;
         const wrap = document.createElement('div');
@@ -134,18 +133,17 @@ document.addEventListener('DOMContentLoaded', function() {
         wrap.style.cssText = 'margin-top:8px; display:flex; gap:6px;';
         const input = document.createElement('input');
         input.type = 'text';
-        input.placeholder = 'Backend host e.g. 192.168.1.100';
-        input.value = currentHost || '';
+        input.placeholder = 'Backend base (e.g. https://path2.slidelis.com)';
+        input.value = currentBase || '';
         input.style.cssText = 'flex:1; padding:4px;';
         const btn = document.createElement('button');
         btn.textContent = 'Save & Retry';
         btn.style.cssText = 'padding:4px 8px;';
         btn.onclick = () => {
-            const host = input.value.trim();
-            if (!host) return;
-            setBackendHost(host);
+            const base = input.value.trim();
+            if (!base) return;
+            setBackendBase(base);
             API_BASE = getApiBase();
-            // Reconnect WS
             try { if (ws) ws.close(); } catch(_) {}
             connectWebSocket();
             loadSlides();
@@ -207,12 +205,33 @@ document.addEventListener('DOMContentLoaded', function() {
             updateBulkActions();
         });
 
+        // Thumbnail (from macro/label if available)
+        const thumb = document.createElement('img');
+        thumb.className = 'slide-thumb';
+        const resolvedThumb = slide.thumbnailUrl ? `${API_BASE}${slide.thumbnailUrl}` : null;
+        if (resolvedThumb) {
+            thumb.src = resolvedThumb;
+            thumb.alt = `${slide.name} thumb`;
+        } else {
+            // simple placeholder
+            thumb.src = 'data:image/svg+xml;utf8,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="56" height="56"><rect width="56" height="56" fill="#f1f3f5"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-size="10" fill="#adb5bd">No Img</text></svg>`);
+            thumb.alt = 'No thumbnail';
+        }
+
         const slideInfo = document.createElement('div');
         slideInfo.className = 'slide-info';
         
         const slideName = document.createElement('div');
         slideName.className = 'slide-name';
         slideName.textContent = slide.name;
+        
+        // Add slide label if available from metadata
+        const slideLabel = document.createElement('div');
+        slideLabel.className = 'slide-label';
+        if (slide.label) {
+            slideLabel.textContent = slide.label;
+            slideLabel.style.cssText = 'font-size: 11px; color: #6c757d; font-style: italic; margin-top: 2px;';
+        }
         
         const slideDetails = document.createElement('div');
         slideDetails.className = 'slide-details';
@@ -221,10 +240,37 @@ document.addEventListener('DOMContentLoaded', function() {
         slideDetails.textContent = `${status} • ${slide.format} • ${size}`;
         
         slideInfo.appendChild(slideName);
+        if (slide.label) {
+            slideInfo.appendChild(slideLabel);
+        }
         slideInfo.appendChild(slideDetails);
+        
+        // Add progress bar container (initially hidden)
+        const progressContainer = document.createElement('div');
+        progressContainer.className = 'progress-container';
+        progressContainer.style.cssText = 'display: none; margin-top: 4px;';
+        progressContainer.innerHTML = `
+            <div class="progress-bar-bg" style="background: #e9ecef; height: 4px; border-radius: 2px; overflow: hidden;">
+                <div class="convert-progress-bar" style="background: #007bff; height: 100%; width: 0%; transition: width 0.3s;"></div>
+            </div>
+            <div class="convert-progress-label" style="font-size: 10px; color: #6c757d; margin-top: 2px;">Preparing...</div>
+        `;
+        slideInfo.appendChild(progressContainer);
         
         const slideActions = document.createElement('div');
         slideActions.className = 'slide-actions';
+        
+        // Rename button
+        const renameBtn = document.createElement('button');
+        renameBtn.className = 'rename-btn';
+        renameBtn.textContent = '✏️';
+        renameBtn.title = 'Rename slide';
+        renameBtn.style.cssText = 'background: #6c757d; color: white; border: none; padding: 4px 6px; border-radius: 3px; cursor: pointer; margin-right: 4px; font-size: 12px;';
+        renameBtn.onclick = (e) => {
+            e.stopPropagation();
+            renameSlide(slide);
+        };
+        slideActions.appendChild(renameBtn);
         
         // Convert button (if not converted)
         if (!slide.converted) {
@@ -236,11 +282,29 @@ document.addEventListener('DOMContentLoaded', function() {
                 convertSlideFromSidebar(slide);
             };
             slideActions.appendChild(convertBtn);
+            
+            // Cancel button (initially hidden, shown during conversion)
+            const cancelBtn = document.createElement('button');
+            cancelBtn.className = 'cancel-btn';
+            cancelBtn.textContent = 'Cancel';
+            cancelBtn.style.display = 'none';
+            cancelBtn.style.background = '#dc3545';
+            cancelBtn.style.color = 'white';
+            cancelBtn.style.border = 'none';
+            cancelBtn.style.padding = '4px 8px';
+            cancelBtn.style.borderRadius = '3px';
+            cancelBtn.style.cursor = 'pointer';
+            cancelBtn.onclick = (e) => {
+                e.stopPropagation();
+                cancelConversion(slide);
+            };
+            slideActions.appendChild(cancelBtn);
         }
         
-        // Assemble grid columns: [checkbox] [info (+progress)] [actions]
+        // Assemble grid columns: [checkbox] [thumb] [info (+progress)] [actions]
         selectWrap.appendChild(checkbox);
         item.appendChild(selectWrap);
+        item.appendChild(thumb);
         item.appendChild(slideInfo);
         item.appendChild(slideActions);
         
@@ -250,7 +314,36 @@ document.addEventListener('DOMContentLoaded', function() {
         return item;
     }
 
-    // Removed old selector UI and handler
+    // Rename slide function
+    async function renameSlide(slide) {
+        const newName = prompt(`Rename slide "${slide.originalName}":`, slide.originalName);
+        if (!newName || newName.trim() === '' || newName.trim() === slide.originalName) {
+            return; // User cancelled or no change
+        }
+
+        try {
+            const response = await fetch(`${getApiBase()}/api/slides/${encodeURIComponent(slide.name)}/rename`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ newName: newName.trim() })
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                console.log('Slide renamed successfully:', result);
+                // Refresh the slide list to show the new name
+                loadSlides();
+            } else {
+                alert(`Failed to rename slide: ${result.error}`);
+            }
+        } catch (error) {
+            console.error('Error renaming slide:', error);
+            alert('Failed to rename slide. Please try again.');
+        }
+    }
 
     // Convert slide to DZI format
     async function convertSlide(slide) {
@@ -316,17 +409,33 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Load the slide
         currentSlide = slide;
+        // Update associated images panel
+        const assoc = document.getElementById('assoc-images');
+        const labelImg = document.getElementById('label-img');
+        const macroImg = document.getElementById('macro-img');
+        if (assoc && labelImg && macroImg) {
+            const labelSrc = slide.labelUrl ? `${API_BASE}${slide.labelUrl}` : '';
+            const macroSrc = slide.macroUrl ? `${API_BASE}${slide.macroUrl}` : '';
+            labelImg.src = labelSrc || '';
+            macroImg.src = macroSrc || '';
+            assoc.style.display = (labelSrc || macroSrc) ? 'block' : 'none';
+        }
+
         if (slide.converted && slide.dziFile) {
-            console.log('Loading DZI file:', slide.dziFile);
+            const dziUrl = `${API_BASE}${slide.dziFile}`; // prefix with backend base so tiles resolve correctly via CF
+            console.log('Loading DZI file:', dziUrl);
             viewer.open({
                 type: 'image',
-                tileSource: slide.dziFile
+                tileSource: dziUrl
             });
             convertBtn.style.display = 'none';
         } else {
             convertBtn.style.display = 'block';
             convertBtn.textContent = `Convert ${slide.name}`;
             viewer.open([]);
+            // No dzi yet, but still show assoc images if any
+            const assoc2 = document.getElementById('assoc-images');
+            if (assoc2) assoc2.style.display = (slide.labelUrl || slide.macroUrl) ? 'block' : 'none';
         }
     }
 
@@ -345,9 +454,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Update button state
                 const slideItem = document.querySelector(`[data-slide-name="${slide.name}"]`);
                 const convertBtn = slideItem.querySelector('.convert-btn');
+                const cancelBtn = slideItem.querySelector('.cancel-btn');
                 if (convertBtn) {
                     convertBtn.textContent = 'Converting...';
                     convertBtn.disabled = true;
+                    convertBtn.style.display = 'none';
+                }
+                if (cancelBtn) {
+                    cancelBtn.style.display = 'inline-block';
                 }
             } else {
                 alert(`Conversion failed: ${result.error}`);
@@ -355,6 +469,35 @@ document.addEventListener('DOMContentLoaded', function() {
         } catch (error) {
             console.error('Conversion start error:', error);
             alert(`Conversion failed to start: ${error.message}`);
+        }
+    }
+
+    // Cancel conversion function
+    async function cancelConversion(slide) {
+        try {
+            const filename = slide.originalFile.split('/').pop();
+            const response = await fetch(`${getApiBase()}/api/convert/${encodeURIComponent(filename)}/cancel`, {
+                method: 'POST'
+            });
+            
+            const result = await response.json();
+            
+            if (response.ok) {
+                console.log(`Conversion cancellation requested for ${slide.name}`);
+                // Update button state immediately
+                const slideItem = document.querySelector(`[data-slide-name="${slide.name}"]`);
+                const convertBtn = slideItem.querySelector('.convert-btn');
+                const cancelBtn = slideItem.querySelector('.cancel-btn');
+                if (cancelBtn) {
+                    cancelBtn.textContent = 'Cancelling...';
+                    cancelBtn.disabled = true;
+                }
+            } else {
+                alert(`Cancellation failed: ${result.error}`);
+            }
+        } catch (error) {
+            console.error('Cancellation error:', error);
+            alert(`Cancellation failed: ${error.message}`);
         }
     }
 
@@ -370,32 +513,54 @@ document.addEventListener('DOMContentLoaded', function() {
             } else if (data.type === 'conversion_error') {
                 alert(`Conversion failed for ${data.filename}: ${data.error}`);
                 loadSlides();
+            } else if (data.type === 'auto_file_detected') {
+                console.log(`New file detected: ${data.fileName}`);
+                loadSlides(); // Refresh slide list when new file is detected
             } else if (data.type === 'conversion_progress') {
                 // Update per-slide progress display
                 const name = data.filename;
                 const item = document.querySelector(`[data-slide-name="${name}"]`);
                 if (item) {
-                    // Grey out converting card
                     item.classList.add('converting');
-                    const prog = getOrCreateProgressBar(name);
+                    
+                    // Show progress container
+                    const progressContainer = item.querySelector('.progress-container');
+                    if (progressContainer) {
+                        progressContainer.style.display = 'block';
+                    }
+                    
                     const bar = item.querySelector('.convert-progress-bar');
                     const label = item.querySelector('.convert-progress-label');
-                    // Indeterminate smooth progress up to 90%, finalize on done
-                    if (bar) {
-                        const current = parseFloat(bar.style.width) || 0;
-                        const next = Math.min(90, current + 5); // gently advance
-                        bar.style.width = (data.done ? 100 : next) + '%';
-                    }
-                    if (label) {
-                        label.textContent = data.done ? `Finalizing...` : `Converting...`;
-                    }
-                    if (data.done) {
-                        // Give a moment for file system settle, then refresh
-                        setTimeout(() => loadSlides(), 1000);
+                    
+                    if (bar && label) {
+                        let percent = 0;
+                        let phase = 'Preparing...';
+                        
+                        if (data.vipsPercent !== undefined && data.vipsPercent > 0) {
+                            percent = Math.round(data.vipsPercent);
+                            phase = data.phase || 'ICC Transform';
+                        } else if (data.tilesCreated !== undefined && data.expectedTiles !== undefined && data.expectedTiles > 0) {
+                            percent = Math.round((data.tilesCreated / data.expectedTiles) * 100);
+                            phase = `Tiling (${data.tilesCreated}/${data.expectedTiles})`;
+                        } else if (data.phase && data.phase.toLowerCase().includes('tiling')) {
+                            phase = 'Tiling...';
+                            percent = 75; // Show progress during tiling
+                        } else if (data.phase) {
+                            phase = data.phase;
+                            percent = 25;
+                        }
+                        
+                        bar.style.width = `${percent}%`;
+                        label.textContent = phase;
+                        
+                        if (data.done) {
+                            bar.style.width = '100%';
+                            label.textContent = 'Complete';
+                            setTimeout(() => loadSlides(), 1000);
+                        }
                     }
                 }
             } else if (data.type === 'slide_deleted') {
-                // Handle slide deletion from other clients
                 slides = slides.filter(s => s.name !== data.filename);
                 updateSlideList();
                 
@@ -405,7 +570,38 @@ document.addEventListener('DOMContentLoaded', function() {
                     convertBtn.style.display = 'none';
                 }
             } else if (data.type === 'auto_conversion_complete') {
-                // Handle auto-processor conversions
+                loadSlides();
+            } else if (data.type === 'conversion_cancelled') {
+                console.log(`Conversion cancelled for ${data.filename}`);
+                // Reset UI state for cancelled conversion
+                const name = data.filename;
+                const item = document.querySelector(`[data-slide-name="${name}"]`);
+                if (item) {
+                    item.classList.remove('converting');
+                    
+                    // Hide progress container
+                    const progressContainer = item.querySelector('.progress-container');
+                    if (progressContainer) {
+                        progressContainer.style.display = 'none';
+                    }
+                    
+                    // Reset buttons
+                    const convertBtn = item.querySelector('.convert-btn');
+                    const cancelBtn = item.querySelector('.cancel-btn');
+                    if (convertBtn) {
+                        convertBtn.textContent = 'Convert';
+                        convertBtn.disabled = false;
+                        convertBtn.style.display = 'inline-block';
+                    }
+                    if (cancelBtn) {
+                        cancelBtn.textContent = 'Cancel';
+                        cancelBtn.disabled = false;
+                        cancelBtn.style.display = 'none';
+                    }
+                }
+                loadSlides();
+            } else if (data.type === 'conversion_auto_delete') {
+                console.log(`Auto-deleted original SVS: ${data.originalFile} after converting ${data.filename}`);
                 loadSlides();
             }
         };

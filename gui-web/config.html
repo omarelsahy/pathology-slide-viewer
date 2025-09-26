@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>I/O Performance Configuration</title>
+  <style>
+    body { font-family: Segoe UI, Tahoma, sans-serif; background:#1e1e1e; color:#fff; margin:0; padding:24px; }
+    .container { max-width: 800px; margin:0 auto; background:#2d2d30; border-radius:8px; padding:24px; }
+    h1 { margin:0 0 8px; font-size:22px; }
+    .sub { color:#bbb; margin-bottom:18px; }
+    .card { background:#3a3a3c; border:1px solid #4a4a4a; border-radius:8px; padding:16px; margin:16px 0; }
+    .row { display:flex; justify-content:space-between; align-items:center; }
+    .label { font-weight:600; }
+    .help { color:#bbb; font-size:12px; margin-top:6px; }
+    .actions { display:flex; gap:12px; justify-content:center; margin-top:18px; }
+    button { background:#007acc; border:none; color:#fff; padding:10px 16px; border-radius:6px; cursor:pointer; }
+    button.secondary { background:#6c757d; }
+    button:disabled { opacity:0.6; cursor:not-allowed; }
+    .status { display:none; margin-top:12px; text-align:center; padding:10px; border-radius:6px; }
+    .status.ok { display:block; background:#1f6f43; }
+    .status.err { display:block; background:#7a2626; }
+    .secondary { background:#6c757d; }
+    .toggle { position:relative; width:64px; height:32px; }
+    .toggle input { opacity:0; width:0; height:0; }
+    .slider { position:absolute; inset:0; background:#666; border-radius:16px; transition:.2s; }
+    .slider:before { content:""; position:absolute; width:26px; height:26px; left:3px; top:3px; background:#fff; border-radius:50%; transition:.2s; }
+    input:checked + .slider { background:#007acc; }
+    input:checked + .slider:before { transform: translateX(32px); }
+    .kv { display:grid; grid-template-columns: 180px 1fr; gap:8px 16px; align-items:center; }
+    code { background:#1e1e1e; padding:2px 6px; border-radius:4px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🔧 I/O Performance Configuration</h1>
+    <div class="sub">Toggle the intermediate format used by the conversion server.</div>
+    <div class="help" style="margin-bottom:12px;">
+      Main server API: <code id="apiBaseText"></code>
+      <button id="changeApiBtn" class="secondary" style="margin-left:8px;">Change</button>
+    </div>
+
+    <div class="card">
+      <div class="row">
+        <div>
+          <div class="label">Intermediate Format: <span id="fmtLabel">TIFF (compressed)</span></div>
+          <div class="help">Enable to use VIPS <code>.v</code> format (larger temp files, minimal I/O). Disable to use compressed TIFF (<code>tif</code> + LZW).</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="useVipsFormat" />
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="kv">
+        <div>Current effective value</div>
+        <div><code id="effectiveValue">tif</code></div>
+        <div>Compression (TIFF)</div>
+        <div><code id="compressionValue">lzw</code></div>
+      </div>
+      <div class="help" style="margin-top:8px;">Note: When VIPS format is enabled, compression is ignored for the intermediate file.</div>
+    </div>
+
+    <div class="actions">
+      <button id="saveBtn">💾 Apply</button>
+      <button id="reloadBtn" class="secondary">🔄 Reload</button>
+    </div>
+    <div id="status" class="status"></div>
+  </div>
+
+  <script>
+    let currentConfig = null;
+    // Determine main server API base (GUI is on a separate server, e.g., :3003)
+    let apiBase = localStorage.getItem('pathology_api_base');
+    if (!apiBase) {
+      const proto = location.protocol;
+      const host = location.hostname;
+      // Default guess: main server runs on 3102 if GUI is on 3003; otherwise keep same port
+      const defaultPort = (location.port === '3003') ? '3102' : (location.port || '3102');
+      apiBase = `${proto}//${host}:${defaultPort}`;
+    }
+    function setApiBase(newBase) {
+      apiBase = newBase.replace(/\/$/, '');
+      localStorage.setItem('pathology_api_base', apiBase);
+      const el = document.getElementById('apiBaseText');
+      if (el) el.textContent = apiBase;
+    }
+    setApiBase(apiBase);
+    const useVipsEl = document.getElementById('useVipsFormat');
+    const fmtLabelEl = document.getElementById('fmtLabel');
+    const effectiveEl = document.getElementById('effectiveValue');
+    const compressionEl = document.getElementById('compressionValue');
+    const statusEl = document.getElementById('status');
+    const saveBtn = document.getElementById('saveBtn');
+    const reloadBtn = document.getElementById('reloadBtn');
+
+    function showStatus(msg, ok=true) {
+      statusEl.textContent = msg;
+      statusEl.className = 'status ' + (ok ? 'ok' : 'err');
+      statusEl.style.display = 'block';
+      setTimeout(() => { statusEl.style.display = 'none'; }, 4000);
+    }
+
+    function updateUIFromConfig(cfg) {
+      const icc = (((cfg||{}).conversion||{}).icc)||{};
+      const useVips = !!icc.useVipsFormat || icc.intermediateFormat === 'v';
+      useVipsEl.checked = useVips;
+      fmtLabelEl.textContent = useVips ? 'VIPS .v (no compression)' : 'TIFF (compressed)';
+      effectiveEl.textContent = useVips ? 'v' : (icc.intermediateFormat || 'tif');
+      compressionEl.textContent = (icc.compression || 'lzw');
+    }
+
+    async function loadConfig() {
+      try {
+        reloadBtn.disabled = true;
+        const res = await fetch(`${apiBase}/api/pathology-config`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        // API returns { config, runtime, lastModified }
+        currentConfig = data.config || data;
+        updateUIFromConfig(currentConfig);
+        showStatus('Configuration loaded', true);
+      } catch (e) {
+        showStatus('Failed to load configuration: ' + e.message, false);
+      } finally {
+        reloadBtn.disabled = false;
+      }
+    }
+
+    async function saveConfig() {
+      try {
+        if (!currentConfig) { showStatus('Config not loaded yet', false); return; }
+        saveBtn.disabled = true;
+        // Deep update of nested values while preserving other fields
+        const cfg = JSON.parse(JSON.stringify(currentConfig));
+        cfg.conversion = cfg.conversion || {};
+        cfg.conversion.icc = cfg.conversion.icc || {};
+        const useVips = useVipsEl.checked;
+        cfg.conversion.icc.useVipsFormat = useVips;
+        cfg.conversion.icc.intermediateFormat = useVips ? 'v' : 'tif';
+        cfg.conversion.icc.useVipsNative = !!useVips;
+        // Keep existing compression/quality values as-is
+
+        const res = await fetch(`${apiBase}/api/pathology-config`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(cfg)
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const updated = await res.json();
+        currentConfig = updated.config || cfg;
+        updateUIFromConfig(currentConfig);
+        showStatus('Configuration saved. Restart conversion server to apply.', true);
+      } catch (e) {
+        showStatus('Failed to save configuration: ' + e.message, false);
+      } finally {
+        saveBtn.disabled = false;
+      }
+    }
+
+    useVipsEl.addEventListener('change', () => {
+      fmtLabelEl.textContent = useVipsEl.checked ? 'VIPS .v (no compression)' : 'TIFF (compressed)';
+      effectiveEl.textContent = useVipsEl.checked ? 'v' : 'tif';
+    });
+
+    reloadBtn.addEventListener('click', loadConfig);
+    saveBtn.addEventListener('click', saveConfig);
+    document.getElementById('changeApiBtn').addEventListener('click', () => {
+      const val = prompt('Enter main server API base (e.g., http://localhost:3102):', apiBase);
+      if (val) {
+        setApiBase(val);
+        loadConfig();
+      }
+    });
+
+    loadConfig();
+  </script>
+</body>
+</html>

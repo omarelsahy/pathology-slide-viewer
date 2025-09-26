@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pathology Slide Viewer - Management Console</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1e1e1e;
+            color: #ffffff;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .container {
+            display: grid;
+            grid-template-columns: 350px 1fr;
+            grid-template-rows: 60px 1fr;
+            height: 100vh;
+        }
+
+        .header {
+            grid-column: 1 / -1;
+            background: #2d2d30;
+            border-bottom: 1px solid #3e3e42;
+            display: flex;
+            align-items: center;
+            padding: 0 20px;
+            gap: 20px;
+        }
+
+        .header h1 {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .server-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: auto;
+        }
+
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #dc3545;
+        }
+
+        .status-indicator.running {
+            background: #28a745;
+        }
+
+        .sidebar {
+            background: #252526;
+            border-right: 1px solid #3e3e42;
+            overflow-y: auto;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-rows: 1fr 300px;
+            background: #1e1e1e;
+        }
+
+        .content-area {
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        .console-area {
+            background: #0c0c0c;
+            border-top: 1px solid #3e3e42;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .console-header {
+            background: #2d2d30;
+            padding: 10px 20px;
+            border-bottom: 1px solid #3e3e42;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .console-output {
+            flex: 1;
+            padding: 10px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 12px;
+            line-height: 1.4;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            background: #0c0c0c;
+        }
+
+        .section {
+            margin-bottom: 25px;
+        }
+
+        .section-title {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 15px;
+            padding: 10px 20px;
+            background: #2d2d30;
+            border-bottom: 1px solid #3e3e42;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+            padding: 0 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 12px;
+            color: #cccccc;
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 8px 12px;
+            background: #3c3c3c;
+            border: 1px solid #5a5a5a;
+            border-radius: 4px;
+            color: #ffffff;
+            font-size: 12px;
+        }
+
+        .form-control:focus {
+            outline: none;
+            border-color: #007acc;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            background: #0e639c;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background-color 0.2s;
+        }
+
+        .btn:hover {
+            background: #1177bb;
+        }
+
+        .btn-success {
+            background: #28a745;
+        }
+
+        .btn-success:hover {
+            background: #218838;
+        }
+
+        .btn-danger {
+            background: #dc3545;
+        }
+
+        .btn-danger:hover {
+            background: #c82333;
+        }
+
+        .btn-small {
+            padding: 4px 8px;
+            font-size: 11px;
+        }
+
+        .folder-selector {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .folder-path {
+            flex: 1;
+            background: #2d2d30;
+            padding: 8px 12px;
+            border: 1px solid #5a5a5a;
+            border-radius: 4px;
+            font-size: 11px;
+            color: #cccccc;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .tabs {
+            display: flex;
+            background: #2d2d30;
+            border-bottom: 1px solid #3e3e42;
+        }
+
+        .tab {
+            padding: 12px 20px;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            font-size: 13px;
+        }
+
+        .tab.active {
+            background: #1e1e1e;
+            border-bottom-color: #007acc;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            margin: 0;
+        }
+
+        .slides-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 15px;
+        }
+
+        .slide-card {
+            background: #2d2d30;
+            border: 1px solid #3e3e42;
+            border-radius: 6px;
+            padding: 15px;
+        }
+
+        .slide-name {
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #ffffff;
+        }
+
+        .slide-info {
+            font-size: 11px;
+            color: #cccccc;
+            margin-bottom: 10px;
+        }
+
+        .slide-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .converted-badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+
+        .converted-badge.yes {
+            background: #28a745;
+            color: white;
+        }
+
+        .converted-badge.no {
+            background: #dc3545;
+            color: white;
+        }
+
+        .vips-info {
+            background: #2d2d30;
+            border: 1px solid #3e3e42;
+            border-radius: 4px;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 11px;
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+
+        .row {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+
+        .col {
+            flex: 1;
+        }
+
+        .console-controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .log-stdout {
+            color: #ffffff;
+        }
+
+        .log-stderr {
+            color: #ff6b6b;
+        }
+
+        .log-info {
+            color: #74c0fc;
+        }
+
+        .log-warning {
+            color: #ffd43b;
+        }
+
+        .log-error {
+            color: #ff6b6b;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Pathology Slide Viewer</h1>
+            <div class="server-status">
+                <span class="status-indicator" id="serverIndicator"></span>
+                <span id="serverStatusText">Server Stopped</span>
+                <button class="btn btn-success btn-small" id="startServerBtn">Start</button>
+                <button class="btn btn-danger btn-small" id="stopServerBtn" disabled>Stop</button>
+            </div>
+        </div>
+
+        <div class="sidebar">
+            <div class="section">
+                <div class="section-title">Folders</div>
+                <div class="form-group">
+                    <label>Source Folder (.svs, .ndpi files)</label>
+                    <div class="folder-selector">
+                        <div class="folder-path" id="sourcePath">Select folder...</div>
+                        <button class="btn btn-small" id="selectSourceBtn">Browse</button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Destination Folder (DZI output)</label>
+                    <div class="folder-selector">
+                        <div class="folder-path" id="destPath">Select folder...</div>
+                        <button class="btn btn-small" id="selectDestBtn">Browse</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="section-title">VIPS Configuration</div>
+                <div class="form-group">
+                    <label>Concurrency (Threads)</label>
+                    <input type="number" class="form-control" id="concurrency" min="1" max="64" value="8">
+                </div>
+                <div class="form-group">
+                    <label>Max Memory (MB)</label>
+                    <input type="number" class="form-control" id="maxMemory" min="512" max="32768" value="4096">
+                </div>
+                <div class="form-group">
+                    <label>Buffer Size (MB)</label>
+                    <input type="number" class="form-control" id="bufferSize" min="64" max="2048" value="512">
+                </div>
+                <div class="form-group">
+                    <label>Tile Size</label>
+                    <select class="form-control" id="tileSize">
+                        <option value="128">128</option>
+                        <option value="256" selected>256</option>
+                        <option value="512">512</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Quality</label>
+                    <input type="range" class="form-control" id="quality" min="60" max="100" value="90">
+                    <span id="qualityValue">90</span>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="section-title">ICC Profile</div>
+                <div class="form-group">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="autoDetectSrgb" checked>
+                        <label for="autoDetectSrgb">Auto-detect sRGB</label>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Custom sRGB Profile</label>
+                    <div class="folder-selector">
+                        <div class="folder-path" id="iccPath">Auto-detect</div>
+                        <button class="btn btn-small" id="selectIccBtn">Browse</button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Color Transform</label>
+                    <select class="form-control" id="colorTransform">
+                        <option value="auto" selected>Auto (size-based)</option>
+                        <option value="always">Always transform</option>
+                        <option value="never">Never transform</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="section-title">VIPS Logging</div>
+                <div class="form-group">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="vipsProgress" checked>
+                        <label for="vipsProgress">Progress</label>
+                    </div>
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="vipsInfo" checked>
+                        <label for="vipsInfo">Info</label>
+                    </div>
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="vipsWarning" checked>
+                        <label for="vipsWarning">Warnings</label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="main-content">
+            <div class="content-area">
+                <div class="tabs">
+                    <div class="tab active" data-tab="slides">Slides</div>
+                    <div class="tab" data-tab="vips-info">VIPS Info</div>
+                    <div class="tab" data-tab="settings">Advanced Settings</div>
+                </div>
+
+                <div class="tab-content active" id="slides-tab">
+                    <div style="margin-bottom: 20px;">
+                        <button class="btn" id="scanSlidesBtn">Scan for Slides</button>
+                        <button class="btn" id="refreshSlidesBtn">Refresh</button>
+                    </div>
+                    <div class="slides-grid" id="slidesGrid">
+                        <!-- Slides will be populated here -->
+                    </div>
+                </div>
+
+                <div class="tab-content" id="vips-info-tab">
+                    <div style="margin-bottom: 20px;">
+                        <button class="btn" id="getVipsInfoBtn">Get VIPS Info</button>
+                    </div>
+                    <div class="vips-info" id="vipsInfoDisplay">
+                        Click "Get VIPS Info" to display VIPS configuration and available options.
+                    </div>
+                </div>
+
+                <div class="tab-content" id="settings-tab">
+                    <div class="row">
+                        <div class="col">
+                            <div class="form-group">
+                                <label>Server Port</label>
+                                <input type="number" class="form-control" id="serverPort" min="1000" max="65535" value="3000">
+                            </div>
+                            <div class="form-group">
+                                <label>Overlap</label>
+                                <input type="number" class="form-control" id="overlap" min="0" max="5" value="1">
+                            </div>
+                            <div class="form-group">
+                                <label>Layout</label>
+                                <select class="form-control" id="layout">
+                                    <option value="dz" selected>Deep Zoom</option>
+                                    <option value="zoomify">Zoomify</option>
+                                    <option value="google">Google Maps</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col">
+                            <div class="form-group">
+                                <div class="checkbox-group">
+                                    <input type="checkbox" id="embedIcc">
+                                    <label for="embedIcc">Embed ICC in tiles</label>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <div class="checkbox-group">
+                                    <input type="checkbox" id="sequential" checked>
+                                    <label for="sequential">Sequential access</label>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <div class="checkbox-group">
+                                    <input type="checkbox" id="novector">
+                                    <label for="novector">Disable vectorization</label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="console-area">
+                <div class="console-header">
+                    <span>Console Output</span>
+                    <div class="console-controls">
+                        <button class="btn btn-small" id="clearConsoleBtn">Clear</button>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="autoScroll" checked>
+                            <label for="autoScroll">Auto-scroll</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="console-output" id="consoleOutput">
+                    Console output will appear here when the server is running...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="gui-renderer.js"></script>
+</body>
+</html>

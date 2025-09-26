@@ -1,0 +1,61 @@
+{
+  "deployment": {
+    "mode": "distributed",
+    "mainServer": {
+      "port": 3102,
+      "host": "0.0.0.0"
+    }
+  },
+  "storage": {
+    "slidesDir": "E:\\OG",
+    "dziDir": "E:\\dzi",
+    "tempDir": "E:\\temp"
+  },
+  "conversion": {
+    "defaultConcurrency": 8,
+    "vips": {
+      "concurrency": 8,
+      "cacheMemoryGB": 32,
+      "quality": 95,
+      "compression": "lzw"
+    },
+    "icc": {
+      "intermediateFormat": "v",
+      "compression": "none",
+      "quality": 100,
+      "useVipsNative": true
+    },
+    "dzi": {
+      "overlap": 1,
+      "layout": "dz",
+      "embedIcc": false,
+      "sequential": true,
+      "novector": false
+    }
+  },
+  "conversionServers": {
+    "autoDiscovery": true,
+    "healthCheckInterval": 10000,
+    "registrationTimeout": 30000,
+    "servers": [
+      {
+        "id": "local",
+        "host": "localhost",
+        "port": 3001,
+        "autoStart": true,
+        "maxConcurrent": 8
+      }
+    ]
+  },
+  "autoProcessor": {
+    "enabled": true
+  },
+  "gui": {
+    "port": 3003,
+    "reconnectInterval": 3000,
+    "updateInterval": 1000
+  },
+  "server": {
+    "port": 3102
+  }
+}

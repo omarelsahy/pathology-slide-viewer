@@ -1,0 +1,37 @@
+{
+  "slidePath": "C:\\Slide Viewer\\pathology-slide-viewer\\test_tiny_saved.tiff",
+  "baseName": "test_tiny_saved_test",
+  "extractedAt": "2025-09-09T18:55:12.294Z",
+  "iccProfile": "C:\\Slide Viewer\\pathology-slide-viewer\\dzi\\metadata\\test_tiny_saved_test.icc",
+  "label": null,
+  "macro": null,
+  "properties": {
+    "filename": "test_tiny_saved.tiff",
+    "size": 262890,
+    "modified": "2025-09-03T23:40:46.501Z",
+    "extension": ".tiff",
+    "openslideSupported": false,
+    "associatedImages": [],
+    "raw": {
+      "C": "\\Slide Viewer\\pathology-slide-viewer\\test_tiny_saved.tiff",
+      "width": "256",
+      "height": "256",
+      "bands": "4",
+      "format": "uchar",
+      "coding": "none",
+      "interpretation": "srgb",
+      "xoffset": "0",
+      "yoffset": "0",
+      "xres": "231.257",
+      "yres": "231.257",
+      "filename": "C",
+      "vips-loader": "tiffload",
+      "n-pages": "1",
+      "icc-profile-data": "480 bytes of binary data",
+      "resolution-unit": "in",
+      "bits-per-sample": "8",
+      "orientation": "1"
+    }
+  },
+  "errors": []
+}
