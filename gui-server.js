@@ -66,7 +66,7 @@ let guiConfig = {
   },
   
   // Server settings
-  serverPort: 3101,
+  serverPort: 3102,
   autoStart: false
 };
 
@@ -94,27 +94,36 @@ const upload = multer({
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'gui-web')));
 
-// Load/Save configuration
+// Load/Save configuration - Updated to use unified config system
 function loadConfig() {
-  const configPath = path.join(__dirname, 'gui-config.json');
   try {
-    if (fs.existsSync(configPath)) {
-      const data = fs.readFileSync(configPath, 'utf8');
-      const loaded = JSON.parse(data);
-      guiConfig = { ...guiConfig, ...loaded };
-    }
+    // Load from our new unified configuration system
+    const config = require('./config.js');
+    
+    // Map unified config to GUI config format for backwards compatibility
+    guiConfig = {
+      ...guiConfig,
+      sourceDir: config.slidesDir,
+      destinationDir: config.dziDir,
+      tempDir: config.tempDir,
+      serverPort: config.port,
+      maxParallelSlides: config.maxParallelSlides,
+      autoDeleteOriginal: config.autoDeleteOriginal,
+      vipsSettings: {
+        ...guiConfig.vipsSettings,
+        concurrency: config.guiConfig?.vipsSettings?.concurrency || guiConfig.vipsSettings.concurrency,
+        maxMemoryMB: config.guiConfig?.vipsSettings?.maxMemoryMB || guiConfig.vipsSettings.maxMemoryMB
+      }
+    };
   } catch (error) {
-    console.error('Failed to load GUI config:', error);
+    console.warn('Could not load unified config, using defaults:', error.message);
   }
 }
 
 function saveConfig() {
-  const configPath = path.join(__dirname, 'gui-config.json');
-  try {
-    fs.writeFileSync(configPath, JSON.stringify(guiConfig, null, 2));
-  } catch (error) {
-    console.error('Failed to save GUI config:', error);
-  }
+  // For now, just log that config would be saved
+  // In the future, we could save back to app-config.json
+  console.log('Config save requested - using unified config system');
 }
 
 // API Routes
@@ -292,7 +301,7 @@ app.post('/api/server/start', (req, res) => {
     return res.json({ success: false, message: 'Server already running', mode: 'process' });
   }
   try {
-    const port = Number(guiConfig.serverPort) || 3101;
+    const port = Number(guiConfig.serverPort) || 3102;
     const env = {
       ...process.env,
       ...buildVipsEnvironment(),
@@ -355,7 +364,7 @@ app.get('/api/server/status', async (req, res) => {
   let running = serverProcess !== null;
   if (!running) {
     try {
-      const url = `http://localhost:${Number(guiConfig.serverPort) || 3101}/api/performance/status`;
+      const url = `http://localhost:${Number(guiConfig.serverPort) || 3102}/api/performance/status`;
       const r = await fetch(url, { timeout: 2000 });
       running = r && r.ok;
     } catch (_) { /* ignore */ }
@@ -603,7 +612,7 @@ loadConfig();
 const server = app.listen(PORT, () => {
   console.log(`\n=== PATHOLOGY SLIDE VIEWER GUI ===`);
   console.log(`GUI Server: http://localhost:${PORT}`);
-  console.log(`Config file: ${path.join(__dirname, 'gui-config.json')}`);
+  console.log(`Config: Using unified configuration system (app-config.json + .env)`);
   // If a Windows service is already running, begin streaming logs so the console is not empty
   if (controlMode === 'service') {
     try {

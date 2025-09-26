@@ -5,28 +5,42 @@ const path = require('path');
 const crypto = require('crypto');
 const cors = require('cors');
 const { spawn, exec, execSync } = require('child_process');
-const WebSocket = require('ws');
 const { Worker } = require('worker_threads');
+const WebSocket = require('ws');
 
 // Load configuration
 const config = require('./config');
 
-// Load centralized pathology configuration
+// Load centralized pathology configuration from unified config system
 let pathologyConfig = {};
 try {
-  pathologyConfig = require('./pathology-config.json');
-  console.log('✅ Loaded centralized pathology configuration');
+  const unifiedConfig = require('./config.js');
+  // Map unified config to pathology config format for backwards compatibility
+  pathologyConfig = {
+    deployment: { mode: 'single' },
+    conversion: { 
+      defaultConcurrency: unifiedConfig.appConfig?.services?.conversion?.maxConcurrent || 8 
+    },
+    conversionServers: { 
+      autoDiscovery: false,
+      servers: [{
+        id: 'local',
+        host: 'localhost',
+        port: unifiedConfig.appConfig?.services?.conversion?.port || 3001,
+        maxConcurrent: unifiedConfig.appConfig?.services?.conversion?.maxConcurrent || 8
+      }]
+    }
+  };
+  console.log('✅ Loaded centralized configuration from unified config system');
 } catch (error) {
-  console.warn('⚠️  Could not load pathology-config.json, using defaults:', error.message);
+  console.warn('⚠️  Could not load unified config, using defaults:', error.message);
   pathologyConfig = {
     deployment: { mode: 'single' },
     conversion: { defaultConcurrency: 8 },
-    conversionServers: { autoDiscovery: false, servers: [] }
+    conversionServers: { servers: [] }
   };
 }
 
-// Conversion Server Registry
-const conversionServers = new Map();
 let lastServerCleanup = Date.now();
 const { workerPool } = require('./workerPool');
 
@@ -49,6 +63,9 @@ let vipsConfig, labClient, autoProcessor, metadataExtractor;
 
 // Active conversion tracking
 const activeConversions = new Map(); // filename -> { processes: [], progressTimer, startTime, outputName }
+
+// Conversion server registry
+const conversionServers = new Map(); // serverId -> { id, host, port, maxConcurrent, activeConversions, lastSeen, status }
 
 // Configure Express for tile serving priority
 app.use((req, res, next) => {
@@ -1839,7 +1856,7 @@ const server = app.listen(PORT, async () => {
 });
 
 // WebSocket server for real-time updates
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.WebSocketServer({ server });
 
 wss.on('connection', (ws) => {
   console.log('New client connected');
