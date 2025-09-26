@@ -1,24 +1,22 @@
 {
   "name": "pathology-slide-viewer",
   "version": "1.0.0",
-  "description": "Web-based pathology slide viewer with remote access",
+  "description": "Web-based pathology slide viewer with automated conversion and remote access",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "frontend": "set PORT=3102 && node frontend-server.js",
-    "backend": "node server.js",
-    "dev:frontend": "set PORT=3102 && nodemon frontend-server.js",
-    "dev:backend": "nodemon server.js",
     "gui": "node gui-server.js",
-    "gui:dev": "set NODE_ENV=development && node gui-server.js",
-    "conversion-server": "set CONVERSION_PORT=3001 && set MAX_CONCURRENT=8 && node conversion-server.js",
-    "start:conversion-server": "set CONVERSION_PORT=3001 && set MAX_CONCURRENT=8 && node conversion-server.js",
-    "test:hybrid": "node test-hybrid-system.js"
+    "conversion": "node conversion-server.js",
+    "all": "concurrently \"npm run start\" \"npm run gui\" \"npm run conversion\"",
+    "dev:all": "concurrently \"npm run dev\" \"nodemon gui-server.js\" \"nodemon conversion-server.js\"",
+    "config": "node -e \"console.log(JSON.stringify(require('./config.js').getSummary(), null, 2))\"",
+    "validate": "node -e \"const config = require('./config.js'); console.log('✅ Configuration loaded successfully'); console.log(config.getSummary());\""
   },
   "dependencies": {
     "axios": "^1.11.0",
     "chokidar": "^3.5.3",
+    "concurrently": "^8.2.2",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",

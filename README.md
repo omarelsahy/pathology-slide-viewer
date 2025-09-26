@@ -1,106 +1,149 @@
 # Pathology Slide Viewer
 
-A web-based pathology slide viewer that supports remote access and high-resolution slide examination. Built with Node.js, Express, and OpenSeadragon for smooth navigation of large pathology slides.
+A professional web-based pathology slide viewer with automated conversion, multi-service architecture, and high-performance slide processing. Built for medical professionals and researchers who need reliable, high-resolution slide examination capabilities.
 
-## Features
+## ✨ Features
 
 - 🔬 **High-Resolution Viewing**: Supports gigapixel pathology slides with smooth zoom and pan
-- 🌐 **Web-Based**: Access slides remotely through any modern web browser
-- 📁 **Multiple Formats**: Supports SVS, NDPI, TIF, TIFF, DZI, and other pathology slide formats
-- ⚡ **Automatic Conversion**: Converts slides to web-optimized DZI format using VIPS
-- 🎯 **Professional Tools**: Navigator, zoom controls, rotation, and full-screen viewing
-- 📊 **Real-Time Updates**: WebSocket notifications for conversion progress
+- 🌐 **Web-Based Interface**: Access slides remotely through any modern web browser
+- 📁 **Multiple Formats**: SVS, NDPI, TIF, TIFF, JP2, VMS, VMU, SCN, and DZI formats
+- ⚡ **Automated Conversion**: Real-time slide conversion using optimized VIPS pipeline
+- 🎯 **Professional Tools**: Advanced navigation, zoom controls, and full-screen viewing
+- 📊 **Real-Time Progress**: Live conversion monitoring with detailed progress tracking
+- 🔧 **Management Console**: Web-based configuration and slide management interface
+- 🚀 **High Performance**: Multi-threaded processing with ICC color correction
 
-## Screenshots
+## 🏗️ Architecture
 
-![Pathology Slide Viewer Interface](docs/screenshot.png)
+The system uses a modern multi-service architecture:
 
-## Quick Start
+- **Backend Server** (port 3102): Main API, slide metadata, and file operations
+- **GUI Management** (port 3003): Web-based configuration and slide management
+- **Conversion Server** (port 3001): Dedicated slide processing with queue management
+- **Auto-processor**: File watcher for automatic slide conversion
+
+## 🚀 Quick Start
 
 ### Prerequisites
 
-- Node.js (v18+ recommended)
-- VIPS image processing library
+- **Node.js** v18+ 
+- **VIPS** image processing library
 
 ### Installation
 
-1. **Clone the repository**
+1. **Clone and setup**
    ```bash
-   git clone https://github.com/yourusername/pathology-slide-viewer.git
+   git clone <repository-url>
    cd pathology-slide-viewer
-   ```
-
-2. **Install dependencies**
-   ```bash
    npm install
    ```
 
-3. **Install VIPS** (for slide conversion)
+2. **Install VIPS** 
    ```bash
-   # Windows (using winget)
+   # Windows
    winget install libvips.libvips
+   # OR run: .\install-vips.ps1
    
-   # Or run the provided script
-   .\install-vips.ps1
+   # Linux
+   sudo apt-get install libvips-dev
+   
+   # macOS
+   brew install vips
    ```
 
-4. **Start the server**
+3. **Configure environment**
    ```bash
-   npm start
+   cp .env.example .env
+   # Edit .env with your settings
    ```
 
-5. **Open your browser**
-   Navigate to `http://localhost:3000`
+4. **Start all services**
+   ```bash
+   npm run all
+   ```
 
-## Usage
+5. **Access the application**
+   - **Management Console**: http://localhost:3003
+   - **Backend API**: http://localhost:3102
+   - **Conversion Status**: http://localhost:3001/status
+
+## 📖 Usage
 
 ### Adding Slides
 
-1. Place your pathology slide files (`.svs`, `.ndpi`, `.tif`, etc.) in the `public/slides/` directory
-2. Refresh the web interface
-3. Select a slide from the dropdown menu
-4. If the slide needs conversion, click the "Convert" button
-5. Wait for conversion to complete (may take several minutes for large files)
-6. View your slide with full zoom and pan capabilities
+1. **Place slides** in your configured slides directory (default: `public/slides/`)
+2. **Access Management Console** at http://localhost:3003
+3. **Monitor auto-conversion** or manually trigger conversions
+4. **View converted slides** through the interface
+
+### Configuration
+
+The system uses a unified configuration system:
+
+- **app-config.json**: Main configuration file
+- **.env**: Environment-specific overrides
+- **Automatic detection**: Optimized defaults based on your system
 
 ### Supported Formats
 
 - **SVS** (Aperio ScanScope)
-- **NDPI** (Hamamatsu NanoZoomer)
+- **NDPI** (Hamamatsu NanoZoomer) 
 - **TIF/TIFF** (Generic TIFF)
-- **DZI** (Deep Zoom Images)
 - **JP2** (JPEG 2000)
 - **VMS/VMU** (Hamamatsu)
 - **SCN** (Leica)
+- **DZI** (Deep Zoom Images)
 
-## Architecture
+## 🔧 Configuration
+
+### Environment Variables
+
+```bash
+# Core settings
+NODE_MODE=server
+PORT=3102
+GUI_PORT=3003
+CONVERSION_PORT=3001
+
+# Storage paths
+SLIDES_DIR=./public/slides
+DZI_DIR=./public/dzi
+TEMP_DIR=./temp
+
+# Performance
+MAX_CONCURRENT=8
+VIPS_CONCURRENCY=8
+```
+
+### Scripts
+
+```bash
+npm start           # Start backend server only
+npm run gui         # Start GUI management console
+npm run conversion  # Start conversion server
+npm run all         # Start all services
+npm run dev:all     # Start all services in development mode
+npm run config      # Show current configuration
+npm run validate    # Validate configuration
+```
+
+## 🏗️ Project Structure
 
 ```
 pathology-slide-viewer/
-├── server.js              # Express server with conversion API
-├── public/
-│   ├── index.html         # Main viewer interface
-│   ├── js/main.js         # Frontend JavaScript
-│   ├── slides/            # Original slide files
-│   └── dzi/               # Converted DZI files
-├── uploads/               # File upload directory
-└── install-vips.ps1       # VIPS installation script
-```
-
-## API Endpoints
-
-- `GET /` - Main viewer interface
-- `GET /api/slides` - List available slides
-- `POST /api/convert/:filename` - Convert slide to DZI format
-- `GET /slides/:filename` - Serve original slide files
-- `GET /dzi/*` - Serve converted DZI tiles
-
-## Configuration
-
-The server runs on port 3000 by default. You can change this by setting the `PORT` environment variable:
-
-```bash
-PORT=8080 npm start
+├── app-config.json        # Unified configuration
+├── config.js              # Configuration loader
+├── server.js              # Backend API server
+├── gui-server.js          # Management console
+├── conversion-server.js   # Conversion processing
+├── autoProcessor.js       # File watcher
+├── gui-web/              # Management interface
+│   ├── index.html
+│   ├── app.js
+│   └── config.html
+├── public/               # Static assets and slides
+├── scripts/              # Service management scripts
+└── install-vips.ps1      # VIPS installation
 ```
 
 ## Performance

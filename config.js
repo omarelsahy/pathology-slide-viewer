@@ -1,31 +1,32 @@
 const path = require('path');
 const fs = require('fs');
 
-// Configuration system for server vs client modes
+// Unified Configuration System - Backwards Compatible
 class Config {
   constructor() {
-    this.mode = process.env.NODE_MODE || 'server'; // 'server' or 'client'
-    this.environment = process.env.NODE_ENV || 'development';
+    // Load the new unified configuration
+    this.appConfig = this.loadAppConfig();
     
-    // Define all default ports in one place (single source of truth)
+    // Maintain backwards compatibility with existing code
+    this.mode = this.appConfig.app.mode;
+    this.environment = process.env.NODE_ENV || 'production';
+    
+    // Port configuration from unified system
+    this.port = this.appConfig.services.backend.port;
     this.defaultPorts = {
-      server: 3101,    // Backend API server
-      client: 3102,    // Frontend development server
-      labServer: 3101
+      server: this.appConfig.services.backend.port,
+      client: this.appConfig.services.gui.port,
+      labServer: this.appConfig.services.backend.port
     };
     
-    // Common configuration
-    this.port = process.env.PORT || this.defaultPorts.server;
     this.apiVersion = 'v1';
     
     // Security
-    this.apiKey = process.env.LAB_API_KEY || this.generateDefaultApiKey();
+    this.apiKey = this.appConfig.security?.apiKey?.key || this.generateDefaultApiKey();
     
-    // Try to load GUI config if present (so services can honor GUI settings)
-    this.guiConfig = this.loadGuiConfig();
-    
-    // Load GUI-specific settings
-    this.autoDeleteOriginal = this.guiConfig?.autoDeleteOriginal || false;
+    // Backwards compatibility - simulate old guiConfig
+    this.guiConfig = this.createBackwardsCompatibleGuiConfig();
+    this.autoDeleteOriginal = this.appConfig.performance?.autoDeleteOriginal || false;
 
     // Mode-specific configuration
     if (this.mode === 'server') {
@@ -35,51 +36,121 @@ class Config {
     }
   }
 
+  loadAppConfig() {
+    try {
+      const configPath = path.join(__dirname, 'app-config.json');
+      if (fs.existsSync(configPath)) {
+        const configData = fs.readFileSync(configPath, 'utf8');
+        return JSON.parse(configData);
+      }
+    } catch (error) {
+      console.warn('Failed to load app-config.json, using defaults:', error.message);
+    }
+    
+    // Return default configuration if file doesn't exist
+    return this.getDefaultAppConfig();
+  }
+
+  createBackwardsCompatibleGuiConfig() {
+    // Create a gui config object that matches the old format for backwards compatibility
+    return {
+      sourceDir: this.appConfig.storage.slidesDir,
+      destinationDir: this.appConfig.storage.dziDir,
+      tempDir: this.appConfig.storage.tempDir,
+      serverPort: this.appConfig.services.backend.port,
+      maxParallelSlides: this.appConfig.conversion.autoProcessor.maxParallelSlides,
+      autoDeleteOriginal: this.appConfig.performance?.autoDeleteOriginal || false,
+      vipsSettings: {
+        concurrency: this.appConfig.conversion.vips.concurrency,
+        maxMemoryMB: this.appConfig.conversion.vips.maxMemoryMB,
+        bufferSizeMB: this.appConfig.conversion.vips.bufferSizeMB,
+        tileSize: this.appConfig.conversion.dzi.tileSize,
+        quality: this.appConfig.conversion.dzi.quality,
+        progress: this.appConfig.conversion.vips.progress,
+        info: this.appConfig.conversion.vips.info,
+        warning: this.appConfig.conversion.vips.warning,
+        overlap: this.appConfig.conversion.dzi.overlap,
+        layout: this.appConfig.conversion.dzi.layout,
+        embedIcc: this.appConfig.conversion.dzi.embedIcc,
+        sequential: this.appConfig.conversion.dzi.sequential,
+        novector: this.appConfig.conversion.dzi.novector
+      }
+    };
+  }
+
+  getDefaultAppConfig() {
+    return {
+      app: { name: "Pathology Slide Viewer", version: "1.0.0", mode: "server" },
+      services: {
+        backend: { port: 3102, host: "0.0.0.0" },
+        gui: { port: 3003, enabled: true },
+        conversion: { port: 3001, enabled: true, maxConcurrent: 8 }
+      },
+      storage: {
+        slidesDir: "public/slides",
+        dziDir: "public/dzi", 
+        tempDir: "temp",
+        uploadsDir: "uploads"
+      },
+      conversion: {
+        autoProcessor: { enabled: true, maxParallelSlides: 6 },
+        vips: { concurrency: 8, maxMemoryMB: 4096, progress: true, info: false, warning: true },
+        dzi: { tileSize: 256, overlap: 1, quality: 90 }
+      },
+      performance: { autoDeleteOriginal: false }
+    };
+  }
+
   initServerMode() {
     console.log('🧪 Initializing LAB SERVER mode');
     
     // Lab server configuration
     this.allowRemoteConnections = true;
-    this.corsOrigins = [
-      `http://localhost:${this.defaultPorts.client}`, // Frontend development server
-      process.env.HOME_CLIENT_URL || '*' // Allow home computer access
+    this.corsOrigins = this.appConfig.security?.cors?.origins || [
+      `http://localhost:${this.appConfig.services.gui.port}`,
+      `http://localhost:${this.appConfig.services.backend.port}`,
+      '*'
     ];
     
-    // File paths (local to lab computer) - allow env override, then GUI config, then default
-    const guiSlides = this.guiConfig?.sourceDir;
-    const guiDzi = this.guiConfig?.destinationDir;
-    this.slidesDir = process.env.SLIDES_DIR || guiSlides || path.join(__dirname, 'public', 'slides');
-    this.dziDir = process.env.DZI_DIR || guiDzi || path.join(__dirname, 'public', 'dzi');
-    this.uploadsDir = path.join(__dirname, 'uploads');
+    // File paths - prioritize env vars, then app config
+    this.slidesDir = process.env.SLIDES_DIR || this.getAbsolutePath(this.appConfig.storage.slidesDir);
+    this.dziDir = process.env.DZI_DIR || this.getAbsolutePath(this.appConfig.storage.dziDir);
+    this.uploadsDir = this.getAbsolutePath(this.appConfig.storage.uploadsDir);
+    this.tempDir = process.env.TEMP_DIR || this.getAbsolutePath(this.appConfig.storage.tempDir);
     
-    // Auto-processor enabled by default on lab server
-    this.autoProcessorEnabled = true;
+    // Auto-processor settings
+    this.autoProcessorEnabled = this.appConfig.conversion.autoProcessor.enabled;
+    this.maxParallelSlides = this.appConfig.conversion.autoProcessor.maxParallelSlides;
     
-    // Parallel processing settings
-    this.maxParallelSlides = this.guiConfig?.maxParallelSlides || 6; // Increased from 3 to 6
-    
-    // Server port: env PORT wins; otherwise use GUI selection if available
-    if (!process.env.PORT && this.guiConfig?.serverPort) {
-      this.port = this.guiConfig.serverPort;
-    }
-
-    // Performance settings for lab computer
-    this.enableVipsOptimization = true;
+    // Performance settings
+    this.enableVipsOptimization = this.appConfig.performance?.enableOptimizations || true;
     this.enableDefenderExclusions = true;
 
-    // Apply VIPS logging defaults from GUI if env not already set
-    if (this.guiConfig?.vipsSettings) {
-      const s = this.guiConfig.vipsSettings;
-      if (process.env.VIPS_PROGRESS === undefined) process.env.VIPS_PROGRESS = s.progress ? '1' : '0';
-      if (process.env.VIPS_INFO === undefined) process.env.VIPS_INFO = s.info ? '1' : '0';
-      if (process.env.VIPS_WARNING === undefined) process.env.VIPS_WARNING = s.warning ? '1' : '0';
-      if (process.env.VIPS_CONCURRENCY === undefined && s.concurrency) process.env.VIPS_CONCURRENCY = String(s.concurrency);
-      if (process.env.VIPS_NTHR === undefined && s.concurrency) process.env.VIPS_NTHR = String(s.concurrency);
-      if (process.env.VIPS_CACHE_MAX_MEMORY === undefined && s.maxMemoryMB) process.env.VIPS_CACHE_MAX_MEMORY = String(s.maxMemoryMB * 1024 * 1024);
-      if (process.env.VIPS_CACHE_MAX === undefined && s.cacheMaxMB) process.env.VIPS_CACHE_MAX = String(s.cacheMaxMB);
-      if (process.env.VIPS_DISC_THRESHOLD === undefined && s.discThresholdMB) process.env.VIPS_DISC_THRESHOLD = String(s.discThresholdMB * 1024 * 1024);
-      if (process.env.VIPS_BUFFER_SIZE === undefined && s.bufferSizeMB) process.env.VIPS_BUFFER_SIZE = String(s.bufferSizeMB * 1024 * 1024);
+    // Apply VIPS environment variables from unified config
+    this.applyVipsEnvironment();
+  }
+
+  applyVipsEnvironment() {
+    const vipsConfig = this.appConfig.conversion.vips;
+    
+    // Apply environment overrides first, then config defaults
+    if (!process.env.VIPS_CONCURRENCY) process.env.VIPS_CONCURRENCY = String(vipsConfig.concurrency);
+    if (!process.env.VIPS_NTHR) process.env.VIPS_NTHR = String(vipsConfig.concurrency);
+    if (!process.env.VIPS_CACHE_MAX_MEMORY) process.env.VIPS_CACHE_MAX_MEMORY = String(vipsConfig.maxMemoryMB * 1024 * 1024);
+    if (!process.env.VIPS_PROGRESS) process.env.VIPS_PROGRESS = vipsConfig.progress ? '1' : '0';
+    if (!process.env.VIPS_INFO) process.env.VIPS_INFO = vipsConfig.info ? '1' : '0';
+    if (!process.env.VIPS_WARNING) process.env.VIPS_WARNING = vipsConfig.warning ? '1' : '0';
+    
+    if (vipsConfig.bufferSizeMB && !process.env.VIPS_BUFFER_SIZE) {
+      process.env.VIPS_BUFFER_SIZE = String(vipsConfig.bufferSizeMB * 1024 * 1024);
     }
+  }
+
+  getAbsolutePath(relativePath) {
+    if (path.isAbsolute(relativePath)) {
+      return relativePath;
+    }
+    return path.resolve(__dirname, relativePath);
   }
 
   initClientMode() {
@@ -87,29 +158,26 @@ class Config {
     
     // Home client configuration
     this.allowRemoteConnections = false;
-    this.corsOrigins = [`http://localhost:${this.defaultPorts.client}`];
+    this.corsOrigins = [`http://localhost:${this.appConfig.services.gui.port}`];
     
-    // Lab server connection settings
+    // Lab server connection settings (for future remote access)
     this.labServer = {
-      url: process.env.LAB_SERVER_URL || `http://192.168.1.100:${this.defaultPorts.labServer}`,
+      url: process.env.LAB_SERVER_URL || `http://192.168.1.100:${this.appConfig.services.backend.port}`,
       apiKey: this.apiKey,
-      timeout: 30000, // 30 seconds
+      timeout: 30000,
       retryAttempts: 3
     };
     
-    // Local paths (for caching and temp files)
-    this.cacheDir = path.join(__dirname, 'cache');
-    this.tempDir = path.join(__dirname, 'temp');
+    // Local paths for client mode
+    this.cacheDir = this.getAbsolutePath(this.appConfig.storage.cacheDir);
+    this.tempDir = this.getAbsolutePath(this.appConfig.storage.tempDir);
     
-    // Disable auto-processor on home client
+    // Disable auto-processor on client
     this.autoProcessorEnabled = false;
-    
-    // Disable VIPS on home computer
     this.enableVipsOptimization = false;
   }
 
   generateDefaultApiKey() {
-    // Generate a simple default API key for development
     const crypto = require('crypto');
     return crypto.randomBytes(32).toString('hex');
   }
@@ -134,24 +202,15 @@ class Config {
       port: this.port,
       slidesDir: this.slidesDir,
       dziDir: this.dziDir,
+      tempDir: this.tempDir,
       autoProcessor: this.autoProcessorEnabled,
       vipsOptimization: this.enableVipsOptimization,
-      ...(this.isClientMode() && {
-        labServerUrl: this.labServer.url
-      })
-    };
-  }
-
-  loadGuiConfig() {
-    try {
-      const p = path.join(__dirname, 'gui-config.json');
-      if (fs.existsSync(p)) {
-        return JSON.parse(fs.readFileSync(p, 'utf8'));
+      services: {
+        backend: this.appConfig.services.backend.port,
+        gui: this.appConfig.services.gui.port,
+        conversion: this.appConfig.services.conversion.port
       }
-    } catch (e) {
-      // ignore and fall back to defaults
-    }
-    return null;
+    };
   }
 }
 
