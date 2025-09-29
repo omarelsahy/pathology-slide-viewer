@@ -2540,8 +2540,9 @@ app.get('/api/slides', async (req, res) => {
           const uniqueName = relativePath ? `${relativePath.replace(/[\\\/]/g, '_')}_${baseName}` : baseName;
           
           // Check for DZI in organized structure first, then fall back to legacy
-          const organizedDziPath = path.join(config.dziDir, uniqueName, `${uniqueName}.dzi`);
-          const legacyDziPath = path.join(config.dziDir, `${uniqueName}.dzi`);
+          const dziDir = pathologyConfig.storage?.dziDir || config.dziDir;
+          const organizedDziPath = path.join(dziDir, uniqueName, `${uniqueName}.dzi`);
+          const legacyDziPath = path.join(dziDir, `${uniqueName}.dzi`);
           const hasDzi = fs.existsSync(organizedDziPath) || fs.existsSync(legacyDziPath);
           const isOrganized = fs.existsSync(organizedDziPath);
           
@@ -2549,13 +2550,13 @@ app.get('/api/slides', async (req, res) => {
           let metadataDir, labelFs, macroFs, metadataJsonPath;
           if (isOrganized) {
             // New organized structure
-            metadataDir = path.join(config.dziDir, uniqueName, 'metadata');
+            metadataDir = path.join(dziDir, uniqueName, 'metadata');
             labelFs = path.join(metadataDir, `${uniqueName}_label.jpg`);
             macroFs = path.join(metadataDir, `${uniqueName}_macro.jpg`);
             metadataJsonPath = path.join(metadataDir, `${uniqueName}_metadata.json`);
           } else {
             // Legacy structure
-            metadataDir = path.join(config.dziDir, 'metadata');
+            metadataDir = path.join(dziDir, 'metadata');
             labelFs = path.join(metadataDir, `${uniqueName}_label.jpg`);
             macroFs = path.join(metadataDir, `${uniqueName}_macro.jpg`);
             metadataJsonPath = path.join(metadataDir, `${uniqueName}_metadata.json`);
@@ -2601,16 +2602,17 @@ app.get('/api/slides', async (req, res) => {
     });
   }
   
-  scanSlidesRecursively(config.slidesDir);
+  scanSlidesRecursively(pathologyConfig.storage?.slidesDir || config.slidesDir);
   
   // Check for standalone DZI files (both organized and legacy structure)
-  if (fs.existsSync(config.dziDir)) {
-    const entries = fs.readdirSync(config.dziDir, { withFileTypes: true });
+  const dziDir = pathologyConfig.storage?.dziDir || config.dziDir;
+  if (fs.existsSync(dziDir)) {
+    const entries = fs.readdirSync(dziDir, { withFileTypes: true });
     
     // Check organized structure (directories containing DZI files)
     entries.forEach(entry => {
       if (entry.isDirectory() && !entry.name.startsWith('_') && !entry.name.startsWith('__')) {
-        const slideDir = path.join(config.dziDir, entry.name);
+        const slideDir = path.join(dziDir, entry.name);
         const dziFile = path.join(slideDir, `${entry.name}.dzi`);
         
         if (fs.existsSync(dziFile)) {
@@ -2651,7 +2653,7 @@ app.get('/api/slides', async (req, res) => {
       
       if (!existing) {
         // Metadata for legacy structure
-        const metadataDir = path.join(config.dziDir, 'metadata');
+        const metadataDir = path.join(dziDir, 'metadata');
         const labelFs = path.join(metadataDir, `${baseName}_label.jpg`);
         const macroFs = path.join(metadataDir, `${baseName}_macro.jpg`);
         const labelUrl = fs.existsSync(labelFs) ? `/dzi/metadata/${baseName}_label.jpg` : null;

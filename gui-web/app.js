@@ -1440,8 +1440,7 @@ async function convertSlide(filename) {
         appendToConsole(`Starting conversion of ${filename}...\n`, 'info');
         
         // Send convert request directly to backend server instead of using GUI-server proxy
-        const backendUrl = `http://localhost:3102/api/touch-file/${encodeURIComponent(filename)}`;
-        const response = await fetch(backendUrl, { method: 'POST' });
+        const response = await fetch(`/api/touch-file/${encodeURIComponent(filename)}`, { method: 'POST' });
         
         if (!response.ok) {
             const txt = await response.text();
@@ -1495,7 +1494,7 @@ async function cancelConversion(filename) {
         
         // Send cancel request directly to backend server instead of using GUI-server proxy
         const backendUrl = `http://localhost:3102/api/cancel-conversion/${encodeURIComponent(filename)}`;
-        const response = await fetch(backendUrl, { method: 'POST' });
+        const response = await fetch(/api/touch-file/\$\{encodeURIComponent(filename)\}, { method: 'POST' });
         
         if (!response.ok) {
             const txt = await response.text();
@@ -2581,26 +2580,54 @@ function setupBrowseButtons() {
 }
 
 function browseDirectory(displayElementId, configField) {
-    const path = prompt('Enter directory path:', document.getElementById(displayElementId).textContent);
-    if (path) {
-        document.getElementById(displayElementId).textContent = path;
-        updateConfig({[configField]: path});
-    }
-}
-
-async function updateConfig(updates) {
-    try {
-        const response = await fetch('/api/config', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(updates)
-        });
-        if (response.ok) {
-            showMessage('Configuration updated!', 'success');
-            await loadGuiConfig(); // Reload to show updated paths
+    // Check if we're running in Electron
+    if (window.parent && window.parent !== window) {
+        // We're in an iframe, use Electron IPC bridge
+        const requestId = Date.now().toString();
+        
+        // Listen for the response
+        const messageHandler = (event) => {
+            if (event.data.action === 'directorySelected' && event.data.requestId === requestId) {
+                window.removeEventListener('message', messageHandler);
+                if (event.data.path) {
+                    document.getElementById(displayElementId).textContent = event.data.path;
+                    // Update the config
+                    if (configField === 'sourceDir') {
+                        currentConfig.sourceDir = event.data.path;
+                    } else if (configField === 'destinationDir') {
+                        currentConfig.destinationDir = event.data.path;
+                    } else if (configField === 'tempDir') {
+                        currentConfig.tempDir = event.data.path;
+                    }
+                    // Auto-save the configuration
+                    saveGuiConfig();
+                }
+            }
+        };
+        
+        window.addEventListener('message', messageHandler);
+        
+        // Send request to parent (Electron renderer)
+        window.parent.postMessage({
+            action: 'selectDirectory',
+            requestId: requestId
+        }, '*');
+    } else {
+        // Fallback to prompt for non-Electron environments
+        const path = prompt('Enter directory path:', document.getElementById(displayElementId).textContent);
+        if (path) {
+            document.getElementById(displayElementId).textContent = path;
+            // Update the config
+            if (configField === 'sourceDir') {
+                currentConfig.sourceDir = path;
+            } else if (configField === 'destinationDir') {
+                currentConfig.destinationDir = path;
+            } else if (configField === 'tempDir') {
+                currentConfig.tempDir = path;
+            }
+            // Auto-save the configuration
+            saveGuiConfig();
         }
-    } catch (error) {
-        showMessage('Failed to update configuration', 'error');
     }
 }
 
@@ -2613,8 +2640,34 @@ async function loadGuiConfig() {
             if (config.sourceDir) document.getElementById('slidesDir').textContent = config.sourceDir;
             if (config.destinationDir) document.getElementById('dziDir').textContent = config.destinationDir;
             if (config.tempDir) document.getElementById('tempDir').textContent = config.tempDir;
+            // Update currentConfig
+            currentConfig = { ...currentConfig, ...config };
         }
     } catch (error) {
         console.error('Failed to load GUI config:', error);
+    }
+}
+
+async function saveGuiConfig() {
+    try {
+        const response = await fetch('/api/config', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(currentConfig)
+        });
+        
+        if (response.ok) {
+            const result = await response.json();
+            console.log('Configuration saved successfully:', result);
+        } else {
+            const errorText = await response.text();
+            console.error('Failed to save configuration:', errorText);
+            throw new Error(`HTTP ${response.status}: ${errorText}`);
+        }
+    } catch (error) {
+        console.error('Error saving GUI config:', error);
+        throw error;
     }
 }

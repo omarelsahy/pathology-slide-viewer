@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, Menu, shell } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
+const fetch = require('node-fetch');
 
 // Keep a global reference of the window object
 let mainWindow;
@@ -246,6 +247,19 @@ ipcMain.handle('open-file-explorer', (event, path) => {
   shell.showItemInFolder(path);
 });
 
+ipcMain.handle('select-directory', async (event) => {
+  const { dialog } = require('electron');
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory'],
+    title: 'Select Directory'
+  });
+  
+  if (!result.canceled && result.filePaths.length > 0) {
+    return result.filePaths[0];
+  }
+  return null;
+});
+
 // Create application menu
 function createMenu() {
   const template = [
@@ -254,14 +268,40 @@ function createMenu() {
       submenu: [
         {
           label: 'Open Slides Folder',
-          click: () => {
-            shell.openPath(path.join(__dirname, 'public', 'slides'));
+          click: async () => {
+            try {
+              const response = await fetch('http://localhost:3003/api/config');
+              if (response.ok) {
+                const config = await response.json();
+                const slidesPath = config.sourceDir || path.join(__dirname, 'public', 'slides');
+                shell.openPath(slidesPath);
+              } else {
+                // Fallback to default path
+                shell.openPath(path.join(__dirname, 'public', 'slides'));
+              }
+            } catch (error) {
+              console.error('Failed to get slides folder path:', error);
+              shell.openPath(path.join(__dirname, 'public', 'slides'));
+            }
           }
         },
         {
           label: 'Open DZI Folder',
-          click: () => {
-            shell.openPath(path.join(__dirname, 'public', 'dzi'));
+          click: async () => {
+            try {
+              const response = await fetch('http://localhost:3003/api/config');
+              if (response.ok) {
+                const config = await response.json();
+                const dziPath = config.destinationDir || path.join(__dirname, 'public', 'dzi');
+                shell.openPath(dziPath);
+              } else {
+                // Fallback to default path
+                shell.openPath(path.join(__dirname, 'public', 'dzi'));
+              }
+            } catch (error) {
+              console.error('Failed to get DZI folder path:', error);
+              shell.openPath(path.join(__dirname, 'public', 'dzi'));
+            }
           }
         },
         { type: 'separator' },

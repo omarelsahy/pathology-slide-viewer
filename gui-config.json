@@ -1,0 +1,30 @@
+{
+  "sourceDir": "F:\\slides\\SVS",
+  "destinationDir": "F:\\slides\\DZI",
+  "tempDir": "F:\\slides\\Temp",
+  "vipsSettings": {
+    "concurrency": 8,
+    "maxMemoryMB": 4096,
+    "bufferSizeMB": 512,
+    "discThresholdMB": 1024,
+    "cacheMaxMB": 512,
+    "srgbProfilePath": "",
+    "autoDetectSrgb": true,
+    "colorTransform": "auto",
+    "embedIcc": false,
+    "progress": true,
+    "info": true,
+    "warning": true,
+    "novector": false,
+    "sequential": true,
+    "tileSize": 256,
+    "overlap": 1,
+    "quality": 90,
+    "layout": "dz",
+    "suffix": ".jpg"
+  },
+  "serverPort": 3102,
+  "autoStart": false,
+  "maxParallelSlides": 6,
+  "autoDeleteOriginal": false
+}

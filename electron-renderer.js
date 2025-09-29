@@ -238,14 +238,22 @@ async function restartAllServers() {
         loadSlideViewer();
     }, 5000);
 }
-
 // File management functions
 async function openSlidesFolder() {
     try {
-        const path = require('path');
-        const slidesPath = path.join(__dirname, 'public', 'slides');
+        // Get current configuration to find the correct slides folder
+        const response = await fetch('http://localhost:3003/api/config');
+        let slidesPath;
+        
+        if (response.ok) {
+            const config = await response.json();
+            slidesPath = config.sourceDir || 'public/slides';
+        } else {
+            slidesPath = 'public/slides'; // Fallback
+        }
+        
         await ipcRenderer.invoke('open-file-explorer', slidesPath);
-        addLogEntry('Opened slides folder', 'all');
+        addLogEntry(`Opened slides folder: ${slidesPath}`, 'all');
     } catch (error) {
         addLogEntry(`Failed to open slides folder: ${error.message}`, 'all', true);
     }
@@ -253,10 +261,19 @@ async function openSlidesFolder() {
 
 async function openDziFolder() {
     try {
-        const path = require('path');
-        const dziPath = path.join(__dirname, 'public', 'dzi');
+        // Get current configuration to find the correct DZI folder
+        const response = await fetch('http://localhost:3003/api/config');
+        let dziPath;
+        
+        if (response.ok) {
+            const config = await response.json();
+            dziPath = config.destinationDir || 'public/dzi';
+        } else {
+            dziPath = 'public/dzi'; // Fallback
+        }
+        
         await ipcRenderer.invoke('open-file-explorer', dziPath);
-        addLogEntry('Opened DZI folder', 'all');
+        addLogEntry(`Opened DZI folder: ${dziPath}`, 'all');
     } catch (error) {
         addLogEntry(`Failed to open DZI folder: ${error.message}`, 'all', true);
     }
@@ -264,9 +281,19 @@ async function openDziFolder() {
 
 async function loadRecentSlides() {
     try {
+        // Get current configuration to find the correct slides folder
+        const response = await fetch('http://localhost:3003/api/config');
+        let slidesPath;
+        
+        if (response.ok) {
+            const config = await response.json();
+            slidesPath = config.sourceDir || 'public/slides';
+        } else {
+            slidesPath = 'public/slides'; // Fallback
+        }
+        
         const fs = require('fs');
         const path = require('path');
-        const slidesPath = path.join(__dirname, 'public', 'slides');
         
         if (!fs.existsSync(slidesPath)) {
             document.getElementById('recent-slides').innerHTML = '<div class="file-item">No slides folder found</div>';
@@ -332,8 +359,9 @@ function viewLogs() {
 }
 
 // Handle iframe messages
-window.addEventListener('message', (event) => {
-    if (event.origin !== 'http://localhost:3102') return;
+window.addEventListener('message', async (event) => {
+    // Allow messages from both slide viewer and management console
+    if (event.origin !== 'http://localhost:3102' && event.origin !== 'http://localhost:3003') return;
     
     // Handle messages from the slide viewer iframe
     if (event.data.action === 'slideOpened') {
@@ -343,6 +371,25 @@ window.addEventListener('message', (event) => {
     } else if (event.data.action === 'conversionCompleted') {
         addLogEntry(`Conversion completed: ${event.data.filename}`, 'conversion');
         refreshFileList(); // Refresh the file list when conversion completes
+    }
+    
+    // Handle directory selection requests from management console
+    else if (event.data.action === 'selectDirectory') {
+        try {
+            const selectedPath = await ipcRenderer.invoke('select-directory');
+            if (selectedPath) {
+                // Send the selected path back to the management console
+                const targetFrame = event.source;
+                targetFrame.postMessage({
+                    action: 'directorySelected',
+                    requestId: event.data.requestId,
+                    path: selectedPath
+                }, event.origin);
+                addLogEntry(`Directory selected: ${selectedPath}`, 'gui');
+            }
+        } catch (error) {
+            addLogEntry(`Failed to select directory: ${error.message}`, 'gui', true);
+        }
     }
 });
 

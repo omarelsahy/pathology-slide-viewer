@@ -92,38 +92,49 @@ const upload = multer({
 
 // Middleware
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'gui-web')));
 
 // Load/Save configuration - Updated to use unified config system
 function loadConfig() {
   try {
-    // Load from our new unified configuration system
-    const config = require('./config.js');
+    // First try to load from saved GUI config file
+    const configPath = path.join(__dirname, 'gui-config.json');
+    if (fs.existsSync(configPath)) {
+      const savedConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      guiConfig = { ...guiConfig, ...savedConfig };
+      console.log('GUI configuration loaded from gui-config.json');
+      return;
+    }
     
-    // Map unified config to GUI config format for backwards compatibility
+    // Fallback: Load from our new unified configuration system
+    const config = require('./config.js');
+    const summary = config.getSummary();
+    
+    // Update guiConfig with values from unified config
     guiConfig = {
       ...guiConfig,
-      sourceDir: config.slidesDir,
-      destinationDir: config.dziDir,
-      tempDir: config.tempDir,
-      serverPort: config.port,
-      maxParallelSlides: config.maxParallelSlides,
-      autoDeleteOriginal: config.autoDeleteOriginal,
+      sourceDir: summary.storage?.slidesDir || guiConfig.sourceDir,
+      destinationDir: summary.storage?.dziDir || guiConfig.destinationDir,
+      serverPort: summary.services?.backend || guiConfig.serverPort,
       vipsSettings: {
         ...guiConfig.vipsSettings,
         concurrency: config.guiConfig?.vipsSettings?.concurrency || guiConfig.vipsSettings.concurrency,
         maxMemoryMB: config.guiConfig?.vipsSettings?.maxMemoryMB || guiConfig.vipsSettings.maxMemoryMB
       }
     };
+    console.log('GUI configuration loaded from unified config system');
   } catch (error) {
-    console.warn('Could not load unified config, using defaults:', error.message);
+    console.warn('Could not load configuration, using defaults:', error.message);
   }
 }
 
 function saveConfig() {
-  // For now, just log that config would be saved
-  // In the future, we could save back to app-config.json
-  console.log('Config save requested - using unified config system');
+  try {
+    const configPath = path.join(__dirname, 'gui-config.json');
+    fs.writeFileSync(configPath, JSON.stringify(guiConfig, null, 2));
+    console.log('GUI configuration saved to gui-config.json');
+  } catch (error) {
+    console.error('Failed to save GUI configuration:', error);
+  }
 }
 
 // API Routes
@@ -204,13 +215,13 @@ app.post('/api/config', (req, res) => {
 
 // Proxy helpers to backend API
 function getBackendBaseUrl() {
-  const port = Number(guiConfig.serverPort) || 3102; // Updated default to match current backend port
-  return `http://localhost:${port}`;
+  // Backend server runs on port 3101, not the GUI server port
+  return `http://localhost:3101`;
 }
 
 function getBackendWsUrl() {
-  const port = Number(guiConfig.serverPort) || 3102; // Updated default to match current backend port
-  return `ws://localhost:${port}`;
+  // Backend WebSocket runs on port 3101, not the GUI server port
+  return `ws://localhost:3101`;
 }
 
 // Proxy: scan slides
@@ -608,12 +619,14 @@ app.post('/api/cancel-conversion/:filename', async (req, res) => {
 // Load config on startup
 loadConfig();
 
+// Static file middleware (after API routes to avoid conflicts)
+app.use(express.static(path.join(__dirname, 'gui-web')));
+
 // WebSocket server for real-time updates
 const server = app.listen(PORT, () => {
   console.log(`\n=== PATHOLOGY SLIDE VIEWER GUI ===`);
   console.log(`GUI Server: http://localhost:${PORT}`);
   console.log(`Config: Using unified configuration system (app-config.json + .env)`);
-  // If a Windows service is already running, begin streaming logs so the console is not empty
   if (controlMode === 'service') {
     try {
       const out = execSync('sc query PathologyBackend', { stdio: ['ignore', 'pipe', 'pipe'] }).toString();
