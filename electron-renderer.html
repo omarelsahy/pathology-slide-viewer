@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pathology Slide Viewer - Desktop</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1e1e1e;
+            color: #ffffff;
+            overflow: hidden;
+        }
+
+        .app-container {
+            display: grid;
+            grid-template-columns: 1fr;
+            grid-template-rows: 40px 50px 1fr 200px;
+            height: 100vh;
+            gap: 1px;
+            background: #333;
+        }
+
+        /* Header */
+        .header {
+            background: #2d2d2d;
+            display: flex;
+            align-items: center;
+            padding: 0 15px;
+            border-bottom: 1px solid #444;
+        }
+
+        /* View Tabs */
+        .view-tabs {
+            background: #252526;
+            display: flex;
+            align-items: center;
+            padding: 0 15px;
+            border-bottom: 1px solid #444;
+        }
+
+        .view-tab {
+            background: #444;
+            color: #ccc;
+            border: none;
+            padding: 10px 20px;
+            cursor: pointer;
+            font-size: 13px;
+            margin-right: 5px;
+            border-radius: 3px 3px 0 0;
+            transition: background 0.2s;
+        }
+
+        .view-tab:hover {
+            background: #555;
+        }
+
+        .view-tab.active {
+            background: #1e1e1e;
+            color: #fff;
+        }
+
+        .header h1 {
+            font-size: 14px;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .server-status {
+            margin-left: auto;
+            display: flex;
+            gap: 10px;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 12px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ff4444;
+        }
+
+        .status-dot.online {
+            background: #44ff44;
+        }
+
+        /* View Container */
+        .view-container {
+            position: relative;
+            overflow: hidden;
+        }
+
+        .view-panel {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: none;
+        }
+
+        .view-panel.active {
+            display: block;
+        }
+
+        /* Main content */
+        .main-content {
+            background: #1e1e1e;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .slide-viewer-container {
+            width: 100%;
+            height: 100%;
+            border: none;
+            background: white;
+        }
+
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(30, 30, 30, 0.9);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            z-index: 100;
+        }
+
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid #444;
+            border-top: 3px solid #0e639c;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 15px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Terminal */
+        .terminal {
+            background: #0c0c0c;
+            border-top: 1px solid #444;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .terminal-header {
+            background: #2d2d2d;
+            padding: 8px 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            border-bottom: 1px solid #444;
+        }
+
+        .terminal-tabs {
+            display: flex;
+            gap: 5px;
+        }
+
+        .terminal-tab {
+            background: #444;
+            color: #ccc;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 3px 3px 0 0;
+            cursor: pointer;
+            font-size: 11px;
+            transition: background 0.2s;
+        }
+
+        .terminal-tab.active {
+            background: #0c0c0c;
+            color: #fff;
+        }
+
+        .terminal-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 11px;
+            line-height: 1.4;
+        }
+
+        .log-entry {
+            margin-bottom: 2px;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .log-entry.backend {
+            color: #4fc3f7;
+        }
+
+        .log-entry.frontend {
+            color: #81c784;
+        }
+
+        .log-entry.conversion {
+            color: #ffb74d;
+        }
+
+        .log-entry.error {
+            color: #f48fb1;
+        }
+
+        .clear-logs {
+            background: #444;
+            color: #ccc;
+            border: none;
+            padding: 4px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 10px;
+            margin-left: auto;
+        }
+
+        .clear-logs:hover {
+            background: #555;
+        }
+
+        /* Responsive adjustments */
+        @media (max-width: 1200px) {
+            .app-container {
+                grid-template-columns: 250px 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <div class="header">
+            <h1>Pathology Slide Viewer</h1>
+            <div class="server-status">
+                <div class="status-indicator">
+                    <div class="status-dot" id="backend-status"></div>
+                    <span>Backend</span>
+                </div>
+                <div class="status-indicator">
+                    <div class="status-dot" id="frontend-status"></div>
+                    <span>GUI</span>
+                </div>
+                <div class="status-indicator">
+                    <div class="status-dot" id="conversion-status"></div>
+                    <span>Conversion</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- View Tabs -->
+        <div class="view-tabs">
+            <button class="view-tab active" onclick="switchView('slide-viewer')">Slide Viewer</button>
+            <button class="view-tab" onclick="switchView('management-console')">Management Console</button>
+        </div>
+
+        <!-- Main Content -->
+        <div class="view-container">
+            <!-- Slide Viewer Panel -->
+            <div class="view-panel active" id="slide-viewer-panel">
+                <div class="loading-overlay" id="loading-overlay">
+                    <div class="loading-spinner"></div>
+                    <div>Starting servers...</div>
+                </div>
+                <iframe 
+                    id="slide-viewer" 
+                    class="slide-viewer-container" 
+                    src="about:blank"
+                    style="display: none;">
+                </iframe>
+            </div>
+
+            <!-- Management Console Panel -->
+            <div class="view-panel" id="management-console-panel">
+                <iframe 
+                    id="management-console" 
+                    class="slide-viewer-container" 
+                    src="about:blank">
+                </iframe>
+            </div>
+        </div>
+
+        <!-- Terminal -->
+        <div class="terminal">
+            <div class="terminal-header">
+                <div class="terminal-tabs">
+                    <button class="terminal-tab active" data-tab="all" onclick="switchTerminalTab('all')">All</button>
+                    <button class="terminal-tab" data-tab="backend" onclick="switchTerminalTab('backend')">Backend</button>
+                    <button class="terminal-tab" data-tab="frontend" onclick="switchTerminalTab('frontend')">GUI</button>
+                    <button class="terminal-tab" data-tab="conversion" onclick="switchTerminalTab('conversion')">Conversion</button>
+                </div>
+                <button class="clear-logs" onclick="clearLogs()">Clear</button>
+            </div>
+            <div class="terminal-content" id="terminal-content">
+                <div class="log-entry">Initializing desktop application...</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="electron-renderer.js"></script>
+</body>
+</html>

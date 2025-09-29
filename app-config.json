@@ -6,7 +6,7 @@
   },
   "services": {
     "backend": {
-      "port": 3102,
+      "port": 3101,
       "host": "0.0.0.0"
     },
     "gui": {
@@ -67,7 +67,7 @@
   "security": {
     "cors": {
       "enabled": true,
-      "origins": ["http://localhost:3003", "http://localhost:3102"]
+      "origins": ["http://localhost:3003", "http://localhost:3101", "http://localhost:3102"]
     },
     "apiKey": {
       "required": false,
