@@ -1,0 +1,55 @@
+# Development override for Pathology Slide Viewer
+# Use: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+version: '3.8'
+
+services:
+  backend:
+    build:
+      target: builder  # Use builder stage with dev tools
+    environment:
+      - NODE_ENV=development
+      - VIPS_INFO=1    # More verbose logging
+      - VIPS_WARNING=1
+    volumes:
+      - .:/app         # Live code reload
+      - /app/node_modules  # Preserve node_modules
+    command: ["npm", "run", "dev"]
+    ports:
+      - "9229:9229"    # Node.js debug port
+  
+  frontend:
+    environment:
+      - NODE_ENV=development
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: ["npm", "run", "dev:frontend"]
+  
+  conversion-worker-1:
+    environment:
+      - NODE_ENV=development
+      - VIPS_INFO=1
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: ["npm", "run", "dev:worker"]
+
+  # Development database for testing
+  postgres:
+    image: postgres:15-alpine
+    container_name: pathology-postgres-dev
+    environment:
+      - POSTGRES_DB=pathology_dev
+      - POSTGRES_USER=pathology
+      - POSTGRES_PASSWORD=development
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-dev-data:/var/lib/postgresql/data
+    networks:
+      - pathology-net
+
+volumes:
+  postgres-dev-data:
+    driver: local

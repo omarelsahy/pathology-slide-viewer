@@ -1,0 +1,127 @@
+# Docker Compose for Pathology Slide Viewer
+# Multi-service architecture with optimized VIPS processing
+
+version: '3.8'
+
+services:
+  # Backend API and conversion service
+  backend:
+    build: 
+      context: .
+      target: production
+    container_name: pathology-backend
+    environment:
+      - NODE_ENV=production
+      - NODE_MODE=server
+      - PORT=3102
+      - CONVERSION_PORT=3001
+      - GUI_PORT=3003
+      # VIPS Performance Optimization
+      - VIPS_CONCURRENCY=8
+      - VIPS_NTHR=8
+      - VIPS_CACHE_MAX_MEMORY=1073741824  # 1GB
+      - VIPS_PROGRESS=1
+      - VIPS_NOVECTOR=0
+      - VIPS_WARNING=1
+      # Storage paths
+      - SLIDES_DIR=/app/data/slides
+      - DZI_DIR=/app/data/dzi
+      - TEMP_DIR=/app/data/temp
+    ports:
+      - "3102:3102"  # Main API
+      - "3001:3001"  # Conversion service
+      - "3003:3003"  # GUI service
+    volumes:
+      # Data persistence
+      - ./data/slides:/app/data/slides:ro  # Read-only slides
+      - ./data/dzi:/app/data/dzi           # DZI output
+      - ./data/temp:/app/data/temp         # Temporary files
+      - ./data/uploads:/app/uploads        # File uploads
+      # Configuration
+      - ./.env:/app/.env:ro
+      - ./app-config.json:/app/app-config.json:ro
+    networks:
+      - pathology-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3102/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Frontend web server (optional - can serve from backend)
+  frontend:
+    build: 
+      context: .
+      target: production
+    container_name: pathology-frontend
+    environment:
+      - NODE_ENV=production
+      - PORT=3104
+    ports:
+      - "3104:3104"
+    volumes:
+      - ./public:/app/public:ro
+    networks:
+      - pathology-net
+    restart: unless-stopped
+    command: ["node", "frontend-server.js"]
+    depends_on:
+      - backend
+
+  # Dedicated conversion workers (for high-volume processing)
+  conversion-worker-1:
+    build: 
+      context: .
+      target: production
+    container_name: pathology-worker-1
+    environment:
+      - NODE_ENV=production
+      - WORKER_ID=1
+      - WORKER_MODE=true
+      # Optimized for conversion workload
+      - VIPS_CONCURRENCY=16
+      - VIPS_NTHR=16
+      - VIPS_CACHE_MAX_MEMORY=2147483648  # 2GB
+      - VIPS_DISC_THRESHOLD=1073741824    # 1GB
+    volumes:
+      - ./data/slides:/app/data/slides:ro
+      - ./data/dzi:/app/data/dzi
+      - ./data/temp:/app/data/temp
+    networks:
+      - pathology-net
+    restart: unless-stopped
+    command: ["node", "conversionWorker.js"]
+    depends_on:
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '4.0'
+
+  # Redis for job queue (optional - for scaling)
+  redis:
+    image: redis:7-alpine
+    container_name: pathology-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - pathology-net
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+
+networks:
+  pathology-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  redis-data:
+    driver: local
+
