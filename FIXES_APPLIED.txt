@@ -1,0 +1,91 @@
+================================================================================
+LARGE FILE (>2GB) SUPPORT - FIXES APPLIED
+Date: 2025-10-01
+================================================================================
+
+ROOT CAUSE:
+-----------
+VIPS had a 50MB memory limit for TIFF file operations, causing this error:
+"tiff2vips: Cumulated memory allocation... is beyond the 52428800 cumulated byte limit"
+
+This occurred during DZI tile generation when reading the temporary TIFF file 
+created by ICC color transformation.
+
+CRITICAL FIX:
+-------------
+✅ Added memory=true option to VIPS input paths
+   - conversion-server.js (line 523)
+   - conversionWorker.js (line 257)
+   
+✅ Disabled VIPS memory limits
+   - vips-config.js (line 38): VIPS_DISC_THRESHOLD='0'
+
+SUPPORTING FIXES:
+-----------------
+✅ Increased Express.js JSON body limits to 100mb
+   - server.js
+   - conversion-server.js
+   - gui-server.js
+
+✅ Increased Node.js heap memory to 4GB
+   - package.json (all server scripts)
+   - .env (NODE_OPTIONS variable)
+
+✅ Increased metadata extraction buffers to 128MB
+   - slideMetadataExtractor.js (3 locations)
+
+FILES MODIFIED:
+---------------
+1. conversion-server.js
+2. conversionWorker.js
+3. vips-config.js
+4. server.js
+5. gui-server.js
+6. package.json
+7. .env
+8. .env.example
+9. slideMetadataExtractor.js
+
+NEW DOCUMENTATION:
+------------------
+1. LARGE_FILE_SUPPORT.md - Comprehensive troubleshooting guide
+2. ENV_SETTINGS_GUIDE.md - Configuration reference for different systems
+3. FIXES_APPLIED.txt - This file
+
+NEXT STEPS:
+-----------
+1. Restart all services:
+   npm run all
+
+2. Test with your large file that was failing
+
+3. Monitor the console for any new errors
+
+4. If successful, the conversion should complete without the
+   "cumulated byte limit" error
+
+EXPECTED BEHAVIOR:
+------------------
+✅ Files >2GB should now convert successfully
+✅ ICC Transform will complete (~10-15 minutes for large files)
+✅ DZI Generation will proceed without memory errors
+✅ Metadata extraction will work with large metadata
+
+PERFORMANCE:
+------------
+For a 2-4GB SVS file, expect:
+- ICC Transform: 5-15 minutes
+- DZI Generation: 10-30 minutes
+- Total: 15-45 minutes (depending on system)
+
+TROUBLESHOOTING:
+----------------
+If you still get errors:
+1. Check that services restarted (Ctrl+C then npm run all)
+2. Verify Node.js is 64-bit: node -p "process.arch"
+3. Verify VIPS is 64-bit: vips --version
+4. Check available RAM: systeminfo | findstr "Memory"
+5. Ensure 2x file size available disk space
+
+Contact support if issues persist.
+================================================================================

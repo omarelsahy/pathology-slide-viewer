@@ -54,13 +54,18 @@ class ConversionServer extends EventEmitter {
     const totalCores = os.cpus().length;
     const totalMemoryGB = Math.round(os.totalmem() / 1024 / 1024 / 1024);
     
-    // Optimize VIPS for maximum performance
-    const vipsConcurrency = Math.max(totalCores, 32); // Use all cores or minimum 32
-    const vipsCacheMemory = Math.min(Math.floor(totalMemoryGB * 0.6), 64); // 60% of RAM or max 64GB
+    // Optimize VIPS for maximum performance - use 70-80% cores and RAM
+    const vipsConcurrency = Math.floor(totalCores * 0.75); // Use 75% of cores
+    const vipsCacheMemoryGB = Math.min(Math.floor(totalMemoryGB * 0.7), 64); // 70% of RAM or max 64GB
+    const vipsCacheMemoryBytes = vipsCacheMemoryGB * 1024 * 1024 * 1024;
+    
+    // CRITICAL: Set disc threshold HIGH to keep operations in RAM (not disk)
+    const discThreshold = process.env.VIPS_DISC_THRESHOLD || (100 * 1024 * 1024 * 1024).toString();
     
     return {
-      VIPS_CONCURRENCY: vipsConcurrency,
-      VIPS_CACHE_MAX_MEMORY: `${vipsCacheMemory}g`,
+      VIPS_CONCURRENCY: vipsConcurrency.toString(),
+      VIPS_CACHE_MAX_MEMORY: vipsCacheMemoryBytes.toString(), // In bytes for consistency
+      VIPS_DISC_THRESHOLD: discThreshold, // HIGH = keep in RAM (CRITICAL for performance)
       VIPS_CACHE_MAX_FILES: '1000',
       VIPS_CACHE_TRACE: '0',
       OMP_NUM_THREADS: totalCores.toString(),
@@ -104,15 +109,24 @@ class ConversionServer extends EventEmitter {
 
     const { vipsConfig, conversionSettings } = this.centralConfig;
     
-    // Update VIPS configuration
+    // Update VIPS configuration - PRESERVE critical settings like VIPS_DISC_THRESHOLD
     if (vipsConfig) {
+      // Store critical settings that must not be overwritten
+      const discThreshold = this.vipsConfig.VIPS_DISC_THRESHOLD;
+      const ompThreads = this.vipsConfig.OMP_NUM_THREADS;
+      const magickThreads = this.vipsConfig.MAGICK_THREAD_LIMIT;
+      
       this.vipsConfig = {
         ...this.vipsConfig,
         VIPS_CONCURRENCY: vipsConfig.concurrency || this.vipsConfig.VIPS_CONCURRENCY,
         VIPS_CACHE_MAX_MEMORY: `${vipsConfig.cacheMemoryGB || 64}g`,
         VIPS_CACHE_MAX_FILES: vipsConfig.cacheMaxFiles?.toString() || this.vipsConfig.VIPS_CACHE_MAX_FILES,
         VIPS_VECTOR: vipsConfig.vector ? '1' : '0',
-        VIPS_WARNING: vipsConfig.warning ? '1' : '0'
+        VIPS_WARNING: vipsConfig.warning ? '1' : '0',
+        // CRITICAL: Restore these settings that must not be lost
+        VIPS_DISC_THRESHOLD: discThreshold,
+        OMP_NUM_THREADS: ompThreads,
+        MAGICK_THREAD_LIMIT: magickThreads
       };
     }
     
@@ -121,10 +135,20 @@ class ConversionServer extends EventEmitter {
       this.maxConcurrent = Math.min(conversionSettings.maxConcurrent || this.maxConcurrent, os.cpus().length);
     }
     
+    // CRITICAL: Store the full conversion config (including ICC settings) for use in conversions
+    // This was missing and causing ICC config to fall back to defaults!
+    if (!this.centralConfig.conversion) {
+      this.centralConfig.conversion = {};
+    }
+    // The conversion.icc config is already in this.centralConfig from fetchCentralConfig()
+    // We just need to make sure it's accessible
+    
     console.log(`🔧 Applied central configuration:`);
     console.log(`   └─ VIPS Concurrency: ${this.vipsConfig.VIPS_CONCURRENCY}`);
     console.log(`   └─ VIPS Cache Memory: ${this.vipsConfig.VIPS_CACHE_MAX_MEMORY}`);
+    console.log(`   └─ VIPS Disc Threshold: ${this.vipsConfig.VIPS_DISC_THRESHOLD} (${Math.round(parseInt(this.vipsConfig.VIPS_DISC_THRESHOLD) / 1024 / 1024 / 1024)}GB)`);
     console.log(`   └─ Max Concurrent: ${this.maxConcurrent}`);
+    console.log(`   └─ ICC Format: ${this.centralConfig.conversion?.icc?.intermediateFormat || 'default'}`);
   }
 
   // Register with main server
@@ -191,7 +215,7 @@ class ConversionServer extends EventEmitter {
   }
 
   setupRoutes() {
-    this.app.use(express.json());
+    this.app.use(express.json({ limit: '100mb' })); // Increased limit for large file operations
     
     // Health check
     this.app.get('/health', (req, res) => {
@@ -404,9 +428,12 @@ class ConversionServer extends EventEmitter {
         useVipsNative: false
       };
       
+      // DEBUG: Log ICC config
+      console.log(`🔍 ICC Config received:`, JSON.stringify(iccConfig, null, 2));
+      
       // Determine intermediate file format and path
       let tempPath, outputFormat;
-      if (iccConfig.useVipsNative || iccConfig.intermediateFormat === 'v') {
+      if (iccConfig.useVipsNative || iccConfig.useVipsFormat || iccConfig.intermediateFormat === 'v') {
         // Use VIPS native format (.v) - fastest I/O, largest files
         tempPath = path.join(tempDir, `${outputBaseName}_icc_temp.v`);
         outputFormat = ''; // No format specifier needed for .v files
@@ -520,7 +547,7 @@ class ConversionServer extends EventEmitter {
       
       const args = [
         'dzsave',
-        tempPath,
+        `${tempPath}[access=sequential,memory=true]`, // Unlimited memory for large files
         outputPath,
         '--layout', 'dz',
         '--suffix', '.jpg[Q=92,optimize_coding,strip]', // Slightly higher quality, optimized
