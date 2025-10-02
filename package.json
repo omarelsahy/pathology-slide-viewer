@@ -13,7 +13,7 @@
     "config": "node -e \"console.log(JSON.stringify(require('./config.js').getSummary(), null, 2))\"",
     "validate": "node -e \"const config = require('./config.js'); console.log('✅ Configuration loaded successfully'); console.log(config.getSummary());\"",
     "electron": "electron .",
-    "electron:dev": "concurrently \"npm run dev:all\" \"wait-on http://localhost:3101 && electron .\"",
+    "electron:dev": "concurrently \"npm run dev:all\" \"wait-on -t 30000 http://localhost:3101/api/slides && electron .\"",
     "electron:build": "electron-builder"
   },
   "dependencies": {

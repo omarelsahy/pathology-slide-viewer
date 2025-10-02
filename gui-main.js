@@ -4,6 +4,7 @@
 const path = require('path');
 const fs = require('fs');
 const { spawn, exec } = require('child_process');
+require('dotenv').config(); // Load .env file
 
 const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require('electron');
 
@@ -80,6 +81,7 @@ function createWindow() {
 app.whenReady().then(() => {
   createWindow();
   createMenu();
+  // Configuration logging moved to separate ready handler below
 });
 
 app.on('window-all-closed', () => {
@@ -177,11 +179,15 @@ ipcMain.handle('start-server', async () => {
   
   try {
     // Update environment with GUI settings
+    // Note: .env values are already loaded, just pass through with overrides
     const env = {
       ...process.env,
       ...buildVipsEnvironment(),
       NODE_MODE: 'server',
-      PORT: guiConfig.serverPort.toString()
+      PORT: guiConfig.serverPort.toString(),
+      SLIDES_DIR: guiConfig.sourceDir,
+      DZI_DIR: guiConfig.destinationDir,
+      TEMP_DIR: guiConfig.tempDir || process.env.TEMP_DIR
     };
     
     serverProcess = spawn('node', ['server.js'], {
@@ -319,13 +325,41 @@ function saveConfigToFile() {
 }
 
 function loadConfigFromFile() {
-  const configPath = path.join(__dirname, 'gui-config.json');
   try {
+    // PRIORITY 1: Environment variables from .env (single source of truth)
+    if (process.env.SLIDES_DIR || process.env.DZI_DIR || process.env.TEMP_DIR) {
+      guiConfig.sourceDir = process.env.SLIDES_DIR || guiConfig.sourceDir;
+      guiConfig.destinationDir = process.env.DZI_DIR || guiConfig.destinationDir;
+      guiConfig.tempDir = process.env.TEMP_DIR || guiConfig.tempDir;
+      guiConfig.serverPort = Number(process.env.PORT) || guiConfig.serverPort;
+      
+      // Load VIPS settings from .env if available
+      if (process.env.VIPS_CONCURRENCY) {
+        guiConfig.vipsSettings.concurrency = Number(process.env.VIPS_CONCURRENCY);
+      }
+      if (process.env.MAX_CONCURRENT) {
+        guiConfig.maxParallelSlides = Number(process.env.MAX_CONCURRENT);
+      }
+      
+      console.log('✅ Electron GUI configuration loaded from .env (single source of truth)');
+      console.log(`   Source: ${guiConfig.sourceDir}`);
+      console.log(`   Destination: ${guiConfig.destinationDir}`);
+      console.log(`   Temp: ${guiConfig.tempDir || 'not set'}`);
+      return;
+    }
+    
+    // PRIORITY 2: Load from saved GUI config file (fallback)
+    const configPath = path.join(__dirname, 'gui-config.json');
     if (fs.existsSync(configPath)) {
       const data = fs.readFileSync(configPath, 'utf8');
       const loaded = JSON.parse(data);
       guiConfig = { ...guiConfig, ...loaded };
+      console.log('⚠️  Electron GUI configuration loaded from gui-config.json (fallback)');
+      console.log('   Consider setting paths in .env for centralized configuration');
+      return;
     }
+    
+    console.log('Using default Electron GUI configuration');
   } catch (error) {
     console.error('Failed to load GUI config:', error);
   }
@@ -333,6 +367,14 @@ function loadConfigFromFile() {
 
 // Load config on startup
 loadConfigFromFile();
+
+// Log configuration source on startup
+app.on('ready', () => {
+  console.log('\n=== PATHOLOGY SLIDE VIEWER - ELECTRON GUI ===');
+  console.log(`Config Source: ${process.env.SLIDES_DIR ? '.env (✅ centralized)' : 'gui-config.json (fallback)'}`);
+  console.log(`Source Directory: ${guiConfig.sourceDir}`);
+  console.log(`Destination Directory: ${guiConfig.destinationDir}`);
+});
 
 // Create menu
 function createMenu() {

@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+require('dotenv').config(); // Load environment variables from .env file
 
 // Unified Configuration System - Backwards Compatible
 class Config {

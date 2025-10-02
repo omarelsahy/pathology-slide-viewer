@@ -8,6 +8,7 @@ const { spawn, exec, execSync } = require('child_process');
 const WebSocket = require('ws');
 const fetch = require('node-fetch');
 const multer = require('multer');
+require('dotenv').config(); // Load .env file
 
 const app = express();
 const PORT = 3003; // Different port from main server
@@ -93,27 +94,50 @@ const upload = multer({
 // Middleware
 app.use(express.json());
 
-// Load/Save configuration - Updated to use unified config system
+// Load/Save configuration - Prioritizes .env as single source of truth
 function loadConfig() {
   try {
-    // First try to load from saved GUI config file
+    // PRIORITY 1: Environment variables from .env (single source of truth)
+    if (process.env.SLIDES_DIR || process.env.DZI_DIR || process.env.TEMP_DIR) {
+      guiConfig.sourceDir = process.env.SLIDES_DIR || guiConfig.sourceDir;
+      guiConfig.destinationDir = process.env.DZI_DIR || guiConfig.destinationDir;
+      guiConfig.tempDir = process.env.TEMP_DIR || guiConfig.tempDir;
+      guiConfig.serverPort = Number(process.env.PORT) || guiConfig.serverPort;
+      
+      // Load VIPS settings from .env if available
+      if (process.env.VIPS_CONCURRENCY) {
+        guiConfig.vipsSettings.concurrency = Number(process.env.VIPS_CONCURRENCY);
+      }
+      if (process.env.MAX_CONCURRENT) {
+        guiConfig.maxParallelSlides = Number(process.env.MAX_CONCURRENT);
+      }
+      
+      console.log('✅ GUI configuration loaded from .env (single source of truth)');
+      console.log(`   Source: ${guiConfig.sourceDir}`);
+      console.log(`   Destination: ${guiConfig.destinationDir}`);
+      console.log(`   Temp: ${guiConfig.tempDir}`);
+      return;
+    }
+    
+    // PRIORITY 2: Load from saved GUI config file (fallback)
     const configPath = path.join(__dirname, 'gui-config.json');
     if (fs.existsSync(configPath)) {
       const savedConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
       guiConfig = { ...guiConfig, ...savedConfig };
-      console.log('GUI configuration loaded from gui-config.json');
+      console.log('⚠️  GUI configuration loaded from gui-config.json (fallback)');
+      console.log('   Consider setting paths in .env for centralized configuration');
       return;
     }
     
-    // Fallback: Load from our new unified configuration system
+    // PRIORITY 3: Load from unified config system (final fallback)
     const config = require('./config.js');
     const summary = config.getSummary();
     
-    // Update guiConfig with values from unified config
     guiConfig = {
       ...guiConfig,
-      sourceDir: summary.storage?.slidesDir || guiConfig.sourceDir,
-      destinationDir: summary.storage?.dziDir || guiConfig.destinationDir,
+      sourceDir: summary.slidesDir || guiConfig.sourceDir,
+      destinationDir: summary.dziDir || guiConfig.destinationDir,
+      tempDir: summary.tempDir || guiConfig.tempDir,
       serverPort: summary.services?.backend || guiConfig.serverPort,
       vipsSettings: {
         ...guiConfig.vipsSettings,
@@ -626,7 +650,8 @@ app.use(express.static(path.join(__dirname, 'gui-web')));
 const server = app.listen(PORT, () => {
   console.log(`\n=== PATHOLOGY SLIDE VIEWER GUI ===`);
   console.log(`GUI Server: http://localhost:${PORT}`);
-  console.log(`Config: Using unified configuration system (app-config.json + .env)`);
+  console.log(`Config Source: ${process.env.SLIDES_DIR ? '.env (✅ centralized)' : 'gui-config.json (fallback)'}`);
+  console.log(`Backend Server: http://localhost:${guiConfig.serverPort}`);
   if (controlMode === 'service') {
     try {
       const out = execSync('sc query PathologyBackend', { stdio: ['ignore', 'pipe', 'pipe'] }).toString();
