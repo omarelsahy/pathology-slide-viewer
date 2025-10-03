@@ -54,6 +54,8 @@ __pycache__/
 # .env (commented out to allow reading for debugging)
 .env.*
 !.env.example
+!.env.development.example
+!.env.production.example
 
 # Digital pathology data (DO NOT COMMIT)
 *.svs

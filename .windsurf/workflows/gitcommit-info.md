@@ -1,60 +1,67 @@
 ---
 description: Generate git commit summary and description for current changes
+auto_execution_mode: 3
 ---
 
 # Git Commit Info Workflow
 
-This workflow analyzes current git changes and generates proper commit messages following conventional commit format. Use with GitHub Desktop or other git clients.
+This workflow automatically analyzes all changes since the last git commit and generates a comprehensive commit message. All steps run automatically without requiring user confirmation.
 
-## Steps
+## Automated Steps
 
-1. **Check git status**
+// turbo
+1. **Get last commit information**
    ```bash
-   git status
+   git log -1 --pretty=format:"%H %s %cr"
    ```
 
-2. **Review changes (if needed)**
+// turbo
+2. **Check current git status**
    ```bash
-   git diff --cached  # for staged changes
-   git diff           # for unstaged changes
+   git status --short
    ```
 
-3. **Generate commit summary**
-   - Use conventional commit format: `type(scope): description`
-   - Common types: feat, fix, docs, style, refactor, test, chore
-   - Keep summary under 50 characters
+// turbo
+3. **Review all changes since last commit**
+   ```bash
+   git diff HEAD
+   ```
+
+// turbo
+4. **List all modified files**
+   ```bash
+   git diff --name-status HEAD
+   ```
+
+5. **Analyze conversation context**
+   - Review all conversations since last commit
+   - Identify what features/fixes were discussed
+   - Determine current work state (complete vs work-in-progress)
+
+6. **Generate commit message**
+   - Create summary using conventional commit format: `type(scope): description`
+   - Common types: feat, fix, docs, style, refactor, test, chore, wip
+   - Keep summary under 72 characters
    - Use imperative mood (e.g., "add", "fix", "update")
+   - If work is incomplete, prefix with "wip:" or include "[WIP]"
 
-4. **Generate commit description**
-   - Explain what and why, not how
-   - Include breaking changes if any
-   - List modified files
-   - Mention benefits/impact
+7. **Generate detailed description**
+   - Explain what was accomplished and why
+   - List all modified files with brief explanations
+   - Note current state (complete, partial, in-progress)
+   - Include any breaking changes or important notes
+   - Mention known issues or next steps if work is incomplete
 
 ## Output Format
 
-Provides ready-to-use commit summary and description for GitHub Desktop or other git clients.
+Provides a ready-to-copy commit message formatted for GitHub Desktop:
 
-## Example Output
+**Commit Summary:** (single line, ≤72 chars)
+**Commit Description:** (detailed multi-line description)
 
-**Summary:**
-```
-feat: add user authentication system
-```
+## Notes
 
-**Description:**
-```
-Implement JWT-based authentication with login/logout functionality.
-Add middleware for protected routes and session management.
-
-Changes:
-- auth.js: JWT token generation and validation
-- middleware/auth.js: Route protection middleware
-- routes/user.js: Login/logout endpoints
-- package.json: Add jsonwebtoken dependency
-
-Benefits:
-- Secure user sessions
-- Protected API endpoints
-- Scalable authentication system
-```
+- All steps execute automatically without user confirmation
+- Detects work-in-progress state and reflects it in commit message
+- Analyzes both code changes and conversation context
+- Output is formatted for direct copy-paste into GitHub Desktop

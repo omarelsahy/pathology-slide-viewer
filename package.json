@@ -4,17 +4,20 @@
   "description": "Web-based pathology slide viewer with automated conversion and remote access",
   "main": "electron-main.js",
   "scripts": {
-    "start": "node --max-old-space-size=4096 server.js",
-    "dev": "nodemon --max-old-space-size=4096 server.js",
+    "start": "node --max-old-space-size=3072 server.js",
+    "dev": "nodemon --max-old-space-size=3072 server.js",
     "gui": "node --max-old-space-size=2048 gui-server.js",
-    "conversion": "node --max-old-space-size=4096 conversion-server.js",
+    "conversion": "node --max-old-space-size=3072 conversion-server.js",
     "all": "concurrently \"npm run start\" \"npm run gui\" \"npm run conversion\"",
-    "dev:all": "concurrently \"npm run dev\" \"nodemon --max-old-space-size=2048 gui-server.js\" \"nodemon --max-old-space-size=4096 conversion-server.js\"",
+    "dev:all": "concurrently \"npm run dev\" \"nodemon --max-old-space-size=2048 gui-server.js\" \"nodemon --max-old-space-size=3072 conversion-server.js\"",
     "config": "node -e \"console.log(JSON.stringify(require('./config.js').getSummary(), null, 2))\"",
     "validate": "node -e \"const config = require('./config.js'); console.log('✅ Configuration loaded successfully'); console.log(config.getSummary());\"",
     "electron": "electron .",
     "electron:dev": "concurrently \"npm run dev:all\" \"wait-on -t 30000 http://localhost:3101/api/slides && electron .\"",
-    "electron:build": "electron-builder"
+    "electron:build": "electron-builder",
+    "env:dev": "node -e \"const fs=require('fs'); fs.copyFileSync('.env.development.example', '.env'); console.log('✅ Switched to DEVELOPMENT environment');\"",
+    "env:prod": "node -e \"const fs=require('fs'); fs.copyFileSync('.env.production.example', '.env'); console.log('✅ Switched to PRODUCTION environment');\"",
+    "env:status": "node -e \"const env=require('dotenv').config(); console.log('Current Environment:', env.parsed?.NODE_ENV || 'unknown');\""
   },
   "dependencies": {
     "axios": "^1.11.0",
