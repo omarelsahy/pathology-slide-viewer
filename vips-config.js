@@ -11,9 +11,9 @@ class VipsConfig {
     this.availableMemory = os.freemem();
     
     // Calculate optimal settings based on system resources
-    this.optimalThreads = Math.max(1, Math.floor(this.cpuCount * 0.5)); // Use 50% of CPU cores
-    this.maxMemoryMB = Math.floor((this.totalMemory * 0.4) / (1024 * 1024)); // Use 40% of total RAM
-    this.tileBufferSize = Math.min(512, Math.floor(this.maxMemoryMB / 4)); // Quarter of allocated memory for tile buffer
+    this.optimalThreads = Math.max(1, Math.floor(this.cpuCount * 0.75)); // Use 75% of CPU cores for better performance
+    this.maxMemoryMB = Math.floor((this.totalMemory * 0.7) / (1024 * 1024)); // Use 70% of total RAM (increased from 40%)
+    this.tileBufferSize = Math.min(1024, Math.floor(this.maxMemoryMB / 4)); // Quarter of allocated memory for tile buffer, max 1GB
     
     console.log(`VIPS Configuration initialized:`);
     console.log(`  CPU Cores: ${this.cpuCount} (using ${this.optimalThreads} threads)`);
@@ -25,25 +25,24 @@ class VipsConfig {
   // Get optimized VIPS environment variables
   getEnvironmentVars() {
     return {
-      // Threading configuration
+      // Thread control
       VIPS_CONCURRENCY: this.optimalThreads.toString(),
-      VIPS_NTHR: this.optimalThreads.toString(),
       
-      // Memory management
-      VIPS_DISC_THRESHOLD: (this.maxMemoryMB * 1024 * 1024).toString(), // Convert to bytes
-      VIPS_CACHE_MAX: this.maxMemoryMB.toString(),
+      // Memory optimization
       VIPS_CACHE_MAX_MEMORY: (this.maxMemoryMB * 1024 * 1024).toString(),
       
       // I/O optimization
       VIPS_BUFFER_SIZE: (this.tileBufferSize * 1024 * 1024).toString(),
       
+      // TIFF file handling for large files - HIGH threshold to keep everything in RAM
+      // Setting this high (100GB) means VIPS will use RAM instead of disk temp files
+      VIPS_DISC_THRESHOLD: (100 * 1024 * 1024 * 1024).toString(), // 100GB threshold
+      
       // Progress reporting
       VIPS_PROGRESS: process.env.VIPS_PROGRESS || '1',
-      VIPS_INFO: process.env.VIPS_INFO || '1',
       
-      // Disable some checks for performance
-      VIPS_NOVECTOR: '0', // Enable vectorization
-      VIPS_WARNING: process.env.VIPS_WARNING || '1'   // Show warnings by default
+      // Disable leak checking in production (performance improvement)
+      VIPS_LEAK: '0'
     };
   }
 

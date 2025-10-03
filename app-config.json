@@ -38,11 +38,11 @@
       "stabilityDelay": 5000
     },
     "vips": {
-      "concurrency": 8,
-      "maxMemoryMB": 4096,
-      "bufferSizeMB": 512,
-      "cacheMaxMB": 1024,
-      "discThresholdMB": 100,
+      "concurrency": 36,
+      "maxMemoryMB": 45000,
+      "bufferSizeMB": 1024,
+      "cacheMaxMB": 10240,
+      "discThresholdMB": 102400,
       "progress": true,
       "info": false,
       "warning": true
@@ -50,14 +50,16 @@
     "icc": {
       "enabled": true,
       "useEmbedded": true,
-      "intermediateFormat": "tiff",
-      "compression": "lzw",
-      "quality": 95
+      "intermediateFormat": "v",
+      "compression": "none",
+      "quality": 85,
+      "useVipsNative": true,
+      "useVipsFormat": true
     },
     "dzi": {
-      "tileSize": 256,
+      "tileSize": 512,
       "overlap": 1,
-      "quality": 90,
+      "quality": 82,
       "layout": "dz",
       "embedIcc": false,
       "sequential": true,

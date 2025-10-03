@@ -19,7 +19,11 @@ try {
   pathologyConfig = {
     deployment: { mode: 'single' },
     conversion: { 
-      defaultConcurrency: unifiedConfig.appConfig?.services?.conversion?.maxConcurrent || 8 
+      defaultConcurrency: unifiedConfig.appConfig?.services?.conversion?.maxConcurrent || 8,
+      // ICC configuration from app-config.json
+      icc: unifiedConfig.appConfig?.conversion?.icc || {},
+      vips: unifiedConfig.appConfig?.conversion?.vips || {},
+      dzi: unifiedConfig.appConfig?.conversion?.dzi || {}
     },
     conversionServers: { 
       autoDiscovery: false,
@@ -92,7 +96,7 @@ const corsOptions = config.isServerMode()
   : { origin: config.corsOrigins, credentials: true };
 
 app.use(cors(corsOptions));
-app.use(express.json());
+app.use(express.json({ limit: '100mb' })); // Increased limit for large file metadata
 
 // Serve GUI (management console) static assets
 app.use('/gui', express.static(path.join(__dirname, 'gui-web')));
@@ -2036,14 +2040,16 @@ app.get('/api/conversion-config', (req, res) => {
     },
     // Expose ICC/intermediate format settings so conversion server can decide
     // between VIPS .v (fast, larger temp) and compressed TIFF (smaller, slower IO)
-    icc: {
-      intermediateFormat: pathologyConfig.conversion?.icc?.useVipsFormat ? 'v' : (pathologyConfig.conversion?.icc?.intermediateFormat || 'tif'),
-      compression: pathologyConfig.conversion?.icc?.compression || 'lzw',
-      quality: pathologyConfig.conversion?.icc?.quality || 95,
-      useVipsNative: pathologyConfig.conversion?.icc?.useVipsNative || false,
-      useVipsFormat: pathologyConfig.conversion?.icc?.useVipsFormat || false,
-      useRamDisk: pathologyConfig.conversion?.icc?.useRamDisk || false,
-      ramDiskSizeGB: pathologyConfig.conversion?.icc?.ramDiskSizeGB || 20
+    conversion: {
+      icc: {
+        intermediateFormat: pathologyConfig.conversion?.icc?.useVipsFormat ? 'v' : (pathologyConfig.conversion?.icc?.intermediateFormat || 'tif'),
+        compression: pathologyConfig.conversion?.icc?.compression || 'lzw',
+        quality: pathologyConfig.conversion?.icc?.quality || 95,
+        useVipsNative: pathologyConfig.conversion?.icc?.useVipsNative || false,
+        useVipsFormat: pathologyConfig.conversion?.icc?.useVipsFormat || false,
+        useRamDisk: pathologyConfig.conversion?.icc?.useRamDisk || false,
+        ramDiskSizeGB: pathologyConfig.conversion?.icc?.ramDiskSizeGB || 20
+      }
     },
     conversionSettings: {
       maxConcurrent: pathologyConfig.conversion?.defaultConcurrency || Math.min(totalCores, 8),

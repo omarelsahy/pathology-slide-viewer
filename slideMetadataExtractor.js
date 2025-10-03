@@ -150,7 +150,7 @@ class SlideMetadataExtractor {
 
       // Use vipsheader -a to list all available header/properties quickly (no temp files)
       const command = `vipsheader -a "${slidePath}"`;
-      exec(command, { maxBuffer: 1024 * 1024 * 16, timeout: 60_000 }, (error, stdout, stderr) => {
+      exec(command, { maxBuffer: 1024 * 1024 * 128, timeout: 120_000 }, (error, stdout, stderr) => {
         if (error) {
           console.warn(`vipsheader failed (${error.message}); returning basic info`);
           if (stderr) console.warn(`vipsheader stderr: ${stderr.substring(0, 2000)}`);
@@ -198,8 +198,8 @@ class SlideMetadataExtractor {
           name: 'vipsheader base64 -> decode',
           run: (next) => {
             const cmd = `vipsheader -f icc-profile-data "${slidePath}"`;
-            // Increase buffer in case of large profiles (~13MB -> base64 ~17MB)
-            exec(cmd, { maxBuffer: 1024 * 1024 * 64 }, (err, stdout) => {
+            // Increase buffer in case of large profiles (~13MB -> base64 ~17MB, up to 128MB for very large files)
+            exec(cmd, { maxBuffer: 1024 * 1024 * 128 }, (err, stdout) => {
               if (err || !stdout || !stdout.trim()) {
                 console.log(`ICC extraction (vipsheader) failed or empty output`);
                 next();
@@ -427,7 +427,7 @@ class SlideMetadataExtractor {
     const candidates = new Set();
     const tryShowProps = () => new Promise((resolve) => {
       const cmd = `openslide-show-properties "${slidePath}"`;
-      exec(cmd, { timeout: 60_000, maxBuffer: 1024 * 1024 * 8 }, (err, stdout) => {
+      exec(cmd, { timeout: 120_000, maxBuffer: 1024 * 1024 * 128 }, (err, stdout) => {
         if (err || !stdout) return resolve([]);
         const lines = stdout.split(/\r?\n/);
         for (const line of lines) {

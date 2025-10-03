@@ -92,7 +92,8 @@ const upload = multer({
 });
 
 // Middleware
-app.use(express.json());
+app.use(express.json({ limit: '100mb' })); // Increased limit for large file operations
+app.use(express.static(path.join(__dirname, 'gui-web')));
 
 // Load/Save configuration - Prioritizes .env as single source of truth
 function loadConfig() {

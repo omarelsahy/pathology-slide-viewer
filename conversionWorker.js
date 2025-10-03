@@ -254,7 +254,7 @@ class ConversionWorker {
     return new Promise((resolve, reject) => {
       const args = [
         'dzsave',
-        inputPath,
+        `${inputPath}[access=sequential,memory=true]`, // Unlimited memory for large files
         outputBasePath,
         '--layout', 'dz',
         '--suffix', '.jpg[Q=90,strip]',
