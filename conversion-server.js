@@ -27,6 +27,9 @@ class ConversionServer extends EventEmitter {
     this.conversionQueue = [];
     this.completedConversions = new Set();
     
+    // Setup timestamped logging
+    this.setupTimestampedLogging();
+    
     // Configuration from main server
     this.centralConfig = null;
     this.heartbeatInterval = null;
@@ -50,6 +53,38 @@ class ConversionServer extends EventEmitter {
     console.log(`===================================\n`);
   }
 
+  setupTimestampedLogging() {
+    // Store original console methods
+    const originalLog = console.log;
+    const originalWarn = console.warn;
+    const originalError = console.error;
+    
+    // Helper function to get timestamp
+    const getTimestamp = () => {
+      const now = new Date();
+      return now.toLocaleTimeString('en-US', { 
+        hour12: false, 
+        hour: '2-digit', 
+        minute: '2-digit', 
+        second: '2-digit',
+        timeZoneName: 'short'
+      });
+    };
+    
+    // Override console methods with timestamps
+    console.log = (...args) => {
+      originalLog(`[${getTimestamp()}]`, ...args);
+    };
+    
+    console.warn = (...args) => {
+      originalWarn(`[${getTimestamp()}]`, ...args);
+    };
+    
+    console.error = (...args) => {
+      originalError(`[${getTimestamp()}]`, ...args);
+    };
+  }
+
   setupVipsConfig() {
     const totalCores = os.cpus().length;
     const totalMemoryGB = Math.round(os.totalmem() / 1024 / 1024 / 1024);
@@ -71,13 +106,12 @@ class ConversionServer extends EventEmitter {
       OMP_NUM_THREADS: totalCores.toString(),
       MAGICK_THREAD_LIMIT: totalCores.toString(),
       // Disable VIPS warnings for cleaner output
-      VIPS_WARNING: '0',
       // Enable SIMD optimizations
       VIPS_VECTOR: '1'
     };
   }
 
-  // Fetch configuration from main server
+  // Fetch configuration from main server or load from app-config.json
   async fetchCentralConfig() {
     try {
       console.log(`📡 Fetching configuration from main server: ${this.mainServerUrl}/api/conversion-config`);
@@ -88,67 +122,71 @@ class ConversionServer extends EventEmitter {
       }
       
       this.centralConfig = await response.json();
-      console.log('✅ Successfully fetched central configuration');
+      console.log(`✅ Central configuration fetched successfully`);
       
-      // Update local configuration with central config
-      this.applyConfiguration();
-      this.configFetched = true;
-      
-      return true;
     } catch (error) {
-      console.warn(`⚠️  Could not fetch central configuration: ${error.message}`);
-      console.log('📋 Using default configuration');
-      this.configFetched = false;
-      return false;
-    }
-  }
-
-  // Apply central configuration to local settings
-  applyConfiguration() {
-    if (!this.centralConfig) return;
-
-    const { vipsConfig, conversionSettings } = this.centralConfig;
-    
-    // Update VIPS configuration - PRESERVE critical settings like VIPS_DISC_THRESHOLD
-    if (vipsConfig) {
-      // Store critical settings that must not be overwritten
-      const discThreshold = this.vipsConfig.VIPS_DISC_THRESHOLD;
-      const ompThreads = this.vipsConfig.OMP_NUM_THREADS;
-      const magickThreads = this.vipsConfig.MAGICK_THREAD_LIMIT;
+      console.log(`⚠️  Could not fetch central configuration: ${error.message}`);
+      console.log(`📋 Loading configuration from app-config.json`);
       
-      this.vipsConfig = {
-        ...this.vipsConfig,
-        VIPS_CONCURRENCY: vipsConfig.concurrency || this.vipsConfig.VIPS_CONCURRENCY,
-        VIPS_CACHE_MAX_MEMORY: `${vipsConfig.cacheMemoryGB || 64}g`,
-        VIPS_CACHE_MAX_FILES: vipsConfig.cacheMaxFiles?.toString() || this.vipsConfig.VIPS_CACHE_MAX_FILES,
-        VIPS_VECTOR: vipsConfig.vector ? '1' : '0',
-        VIPS_WARNING: vipsConfig.warning ? '1' : '0',
-        // CRITICAL: Restore these settings that must not be lost
-        VIPS_DISC_THRESHOLD: discThreshold,
-        OMP_NUM_THREADS: ompThreads,
-        MAGICK_THREAD_LIMIT: magickThreads
-      };
+      // Try to load from app-config.json
+      try {
+        const configPath = path.join(__dirname, 'app-config.json');
+        
+        if (fs.existsSync(configPath)) {
+          const configData = fs.readFileSync(configPath, 'utf8');
+          const appConfig = JSON.parse(configData);
+          
+          this.centralConfig = {
+            conversion: appConfig.conversion || {}
+          };
+          
+          console.log(`✅ Configuration loaded from app-config.json`);
+          console.log(`🔍 ICC Config from app-config.json:`, JSON.stringify(this.centralConfig.conversion.icc, null, 2));
+        } else {
+          throw new Error('app-config.json not found');
+        }
+      } catch (configError) {
+        console.log(`⚠️  Could not load app-config.json: ${configError.message}`);
+        console.log(`📋 Using default configuration`);
+        
+        // Fallback to default configuration with client-side ICC
+        this.centralConfig = {
+          conversion: {
+            vips: {
+              concurrency: Math.min(os.cpus().length, 8),
+              maxMemoryMB: Math.floor(os.totalmem() / 1024 / 1024 * 0.7),
+              progress: true,
+              info: false,
+              warning: true
+            },
+            icc: {
+              enabled: false,
+              serverSide: false,
+              clientSide: true,
+              extractProfile: true,
+              intermediateFormat: 'tif',
+              compression: 'lzw',
+              quality: 95,
+              useVipsNative: false
+            },
+            dzi: {
+              tileSize: 256,
+              overlap: 1,
+              quality: 90
+            }
+          }
+        };
+      }
     }
-    
-    // Update conversion settings
-    if (conversionSettings) {
-      this.maxConcurrent = Math.min(conversionSettings.maxConcurrent || this.maxConcurrent, os.cpus().length);
-    }
-    
-    // CRITICAL: Store the full conversion config (including ICC settings) for use in conversions
-    // This was missing and causing ICC config to fall back to defaults!
-    if (!this.centralConfig.conversion) {
-      this.centralConfig.conversion = {};
-    }
-    // The conversion.icc config is already in this.centralConfig from fetchCentralConfig()
-    // We just need to make sure it's accessible
     
     console.log(`🔧 Applied central configuration:`);
     console.log(`   └─ VIPS Concurrency: ${this.vipsConfig.VIPS_CONCURRENCY}`);
     console.log(`   └─ VIPS Cache Memory: ${this.vipsConfig.VIPS_CACHE_MAX_MEMORY}`);
     console.log(`   └─ VIPS Disc Threshold: ${this.vipsConfig.VIPS_DISC_THRESHOLD} (${Math.round(parseInt(this.vipsConfig.VIPS_DISC_THRESHOLD) / 1024 / 1024 / 1024)}GB)`);
     console.log(`   └─ Max Concurrent: ${this.maxConcurrent}`);
-    console.log(`   └─ ICC Format: ${this.centralConfig.conversion?.icc?.intermediateFormat || 'default'}`);
+    console.log(`   └─ ICC Enabled: ${this.centralConfig.conversion?.icc?.enabled}`);
+    console.log(`   └─ ICC Server-Side: ${this.centralConfig.conversion?.icc?.serverSide}`);
+    console.log(`   └─ ICC Client-Side: ${this.centralConfig.conversion?.icc?.clientSide}`);
   }
 
   // Register with main server
@@ -388,11 +426,21 @@ class ConversionServer extends EventEmitter {
     this.activeConversions.set(outputBaseName, conversionState);
 
     try {
-      // Step 1: ICC Color Transform (optimized)
-      await this.performICCTransform(conversionState);
+      // Check if server-side ICC is enabled
+      const iccConfig = this.centralConfig?.conversion?.icc || {};
+      const useServerSideICC = iccConfig.enabled !== false && iccConfig.serverSide !== false;
       
-      // Step 2: DZI Tile Generation (optimized)
-      await this.performDZIConversion(conversionState);
+      if (useServerSideICC) {
+        // Two-pass: ICC transform then DZI generation (required for OpenSlide)
+        console.log(`🎨 Two-pass ICC correction: transform then DZI generation`);
+        await this.performICCTransform(conversionState);
+        await this.performDZIConversion(conversionState);
+      } else {
+        // No ICC processing
+        console.log(`⚡ Skipping ICC transform (disabled)`);
+        conversionState.tempPath = conversionState.inputPath; // Use original file directly
+        await this.performDZIConversion(conversionState);
+      }
       
       // Step 3: Metadata Extraction (parallel)
       await this.extractMetadata(conversionState);
@@ -460,6 +508,16 @@ class ConversionServer extends EventEmitter {
       
       console.log(`ICC Transform: ${path.basename(inputPath)} -> temp (concurrency: ${optimalConcurrency})`);
       
+      // Debug: Check what ICC profile info we can get
+      console.log(`🔍 Checking ICC profile information...`);
+      try {
+        const { spawn: syncSpawn } = require('child_process');
+        const profileInfo = syncSpawn('vips', ['iccexport', inputPath, '/dev/null'], { encoding: 'utf8' });
+        console.log(`📊 ICC Profile debug info available`);
+      } catch (err) {
+        console.log(`⚠️ Could not get ICC profile info: ${err.message}`);
+      }
+      
       // OPTIMIZATION: Use embedded ICC profile directly instead of Windows system profiles
       // This is much faster and more accurate for pathology slides
       const args = [
@@ -468,6 +526,7 @@ class ConversionServer extends EventEmitter {
         `${tempPath}${outputFormat}`, // Dynamic format based on configuration
         '--embedded', // Use the slide's embedded ICC profile as SOURCE
         'srgb',     // Target profile: built-in sRGB
+        '--intent', 'perceptual', // Use perceptual intent (Aperio default)
         `--vips-concurrency=${optimalConcurrency}`,
         '--vips-progress'
       ];
@@ -475,6 +534,7 @@ class ConversionServer extends EventEmitter {
       // Log the exact command for verification
       console.log(`🎨 ICC Transform Command: vips ${args.join(' ')}`);
       console.log(`✅ Using EMBEDDED ICC profile from slide (not Windows system profile)`);
+      console.log(`🎯 Rendering intent: PERCEPTUAL (Aperio-compatible, step 1 of 2-profile system)`);
       console.log(`📁 Temp file: ${path.basename(tempPath)} (${iccConfig.useVipsNative || iccConfig.intermediateFormat === 'v' ? 'VIPS native' : 'compressed TIFF'})`);
 
       const env = {
@@ -545,9 +605,11 @@ class ConversionServer extends EventEmitter {
       
       console.log(`DZI Generation: temp -> ${outputBaseName}.dzi (concurrency: ${optimalConcurrency})`);
       
+      // For OpenSlide files (.svs), we need to use the two-pass approach
+      // OpenSlide doesn't support ICC parameters in the format specifier
       const args = [
         'dzsave',
-        `${tempPath}[access=sequential,memory=true]`, // Unlimited memory for large files
+        `${tempPath}[access=sequential,memory=true]`, // Standard OpenSlide access
         outputPath,
         '--layout', 'dz',
         '--suffix', '.jpg[Q=92,optimize_coding,strip]', // Slightly higher quality, optimized
@@ -586,11 +648,13 @@ class ConversionServer extends EventEmitter {
       });
 
       proc.on('close', (code) => {
-        // Clean up temp file
+        // Clean up temp file (but not the original input file)
         try {
-          if (fs.existsSync(tempPath)) {
+          if (fs.existsSync(tempPath) && tempPath !== conversionState.inputPath) {
             fs.unlinkSync(tempPath);
             console.log(`Cleaned up temp file: ${path.basename(tempPath)}`);
+          } else if (tempPath === conversionState.inputPath) {
+            console.log(`Skipping cleanup of original file: ${path.basename(tempPath)}`);
           }
         } catch (e) {
           console.warn('Failed to clean up temp file:', e.message);
@@ -605,6 +669,69 @@ class ConversionServer extends EventEmitter {
 
       proc.on('error', (error) => {
         reject(error);
+      });
+    });
+  }
+
+  async extractICCProfile(conversionState) {
+    // Extract ICC profile from the original slide for client-side use
+    return new Promise((resolve, reject) => {
+      const { inputPath, outputBaseName, dziDir } = conversionState;
+      
+      console.log(`📊 Extracting ICC profile for client-side use: ${outputBaseName}`);
+      
+      // Use vipsheader to extract ICC profile data
+      const proc = spawn('vipsheader', ['-f', 'icc-profile-data', inputPath]);
+      
+      let profileData = '';
+      let errorData = '';
+      
+      proc.stdout.on('data', (data) => {
+        profileData += data.toString();
+      });
+      
+      proc.stderr.on('data', (data) => {
+        errorData += data.toString();
+      });
+      
+      proc.on('close', (code) => {
+        if (code === 0 && profileData.trim()) {
+          try {
+            // Save ICC profile to metadata directory
+            const metadataDir = path.join(dziDir, 'metadata');
+            if (!fs.existsSync(metadataDir)) {
+              fs.mkdirSync(metadataDir, { recursive: true });
+            }
+            
+            const metadataPath = path.join(metadataDir, `${outputBaseName}.json`);
+            let metadata = {};
+            
+            // Load existing metadata if available
+            if (fs.existsSync(metadataPath)) {
+              metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+            }
+            
+            // Add ICC profile data (base64 encoded binary data from vips)
+            metadata.iccProfile = profileData.trim();
+            metadata.colorSpace = 'aperio-native';
+            metadata.needsTransform = true;
+            
+            fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
+            console.log(`✅ ICC profile extracted and saved for ${outputBaseName}`);
+            resolve();
+          } catch (error) {
+            console.warn(`Failed to save ICC profile for ${outputBaseName}:`, error.message);
+            resolve(); // Don't fail conversion if ICC extraction fails
+          }
+        } else {
+          console.warn(`No ICC profile found for ${outputBaseName} (may use default sRGB)`);
+          resolve(); // Not all slides have ICC profiles, this is okay
+        }
+      });
+      
+      proc.on('error', (error) => {
+        console.warn(`ICC profile extraction error for ${outputBaseName}:`, error.message);
+        resolve(); // Don't fail conversion if ICC extraction fails
       });
     });
   }

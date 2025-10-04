@@ -2,16 +2,51 @@
 // Provides a web interface for managing the slide viewer backend
 
 const express = require('express');
+const http = require('http');
+const WebSocket = require('ws');
 const path = require('path');
 const fs = require('fs');
-const { spawn, exec, execSync } = require('child_process');
-const WebSocket = require('ws');
+const os = require('os');
 const fetch = require('node-fetch');
+const { execSync } = require('child_process');
 const multer = require('multer');
-require('dotenv').config(); // Load .env file
 
 const app = express();
-const PORT = 3003; // Different port from main server
+
+// Setup timestamped logging
+function setupTimestampedLogging() {
+  // Store original console methods
+  const originalLog = console.log;
+  const originalWarn = console.warn;
+  const originalError = console.error;
+  
+  // Helper function to get timestamp
+  const getTimestamp = () => {
+    const now = new Date();
+    return now.toLocaleTimeString('en-US', { 
+      hour12: false, 
+      hour: '2-digit', 
+      minute: '2-digit', 
+      second: '2-digit'
+    });
+  };
+  
+  // Override console methods with timestamps
+  console.log = (...args) => {
+    originalLog(`[${getTimestamp()}]`, ...args);
+  };
+  
+  console.warn = (...args) => {
+    originalWarn(`[${getTimestamp()}]`, ...args);
+  };
+  
+  console.error = (...args) => {
+    originalError(`[${getTimestamp()}]`, ...args);
+  };
+}
+
+// Initialize timestamped logging
+setupTimestampedLogging();
 
 let serverProcess = null; // used only in process mode
 let controlMode = 'process'; // 'service' | 'process'
@@ -648,9 +683,9 @@ loadConfig();
 app.use(express.static(path.join(__dirname, 'gui-web')));
 
 // WebSocket server for real-time updates
-const server = app.listen(PORT, () => {
+const server = app.listen(guiConfig.serverPort, () => {
   console.log(`\n=== PATHOLOGY SLIDE VIEWER GUI ===`);
-  console.log(`GUI Server: http://localhost:${PORT}`);
+  console.log(`GUI Server: http://localhost:${guiConfig.serverPort}`);
   console.log(`Config Source: ${process.env.SLIDES_DIR ? '.env (✅ centralized)' : 'gui-config.json (fallback)'}`);
   console.log(`Backend Server: http://localhost:${guiConfig.serverPort}`);
   if (controlMode === 'service') {

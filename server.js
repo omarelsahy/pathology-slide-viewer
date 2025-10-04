@@ -1,17 +1,57 @@
-require('dotenv').config();
+#!/usr/bin/env node
+
+/**
+ * Pathology Slide Viewer - Main Server
+ * Handles slide management, conversion coordination, and web interface
+ */
+
 const express = require('express');
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
-const cors = require('cors');
-const { spawn, exec, execSync } = require('child_process');
-const { Worker } = require('worker_threads');
+const http = require('http');
 const WebSocket = require('ws');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
+const { spawn } = require('child_process');
+const chokidar = require('chokidar');
+const os = require('os');
+const fetch = require('node-fetch');
+const cors = require('cors');
 
-// Load configuration
-const config = require('./config');
+// Setup timestamped logging
+function setupTimestampedLogging() {
+  // Store original console methods
+  const originalLog = console.log;
+  const originalWarn = console.warn;
+  const originalError = console.error;
+  
+  // Helper function to get timestamp
+  const getTimestamp = () => {
+    const now = new Date();
+    return now.toLocaleTimeString('en-US', { 
+      hour12: false, 
+      hour: '2-digit', 
+      minute: '2-digit', 
+      second: '2-digit'
+    });
+  };
+  
+  // Override console methods with timestamps
+  console.log = (...args) => {
+    originalLog(`[${getTimestamp()}]`, ...args);
+  };
+  
+  console.warn = (...args) => {
+    originalWarn(`[${getTimestamp()}]`, ...args);
+  };
+  
+  console.error = (...args) => {
+    originalError(`[${getTimestamp()}]`, ...args);
+  };
+}
 
-// Load centralized pathology configuration from unified config system
+// Initialize timestamped logging
+setupTimestampedLogging();
+
 let pathologyConfig = {};
 try {
   const unifiedConfig = require('./config.js');
@@ -61,6 +101,9 @@ const VipsConfig = require('./vips-config');
 const SlideMetadataExtractor = require('./slideMetadataExtractor');
 const LabServerClient = require('./services/labServerClient');
 
+// Load config
+const config = require('./config');
+
 const app = express();
 const PORT = config.port;
 let vipsConfig, labClient, autoProcessor, metadataExtractor;
@@ -98,6 +141,9 @@ const corsOptions = config.isServerMode()
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '100mb' })); // Increased limit for large file metadata
 
+// Serve main viewer static assets (public directory)
+app.use(express.static(path.join(__dirname, 'public')));
+
 // Serve GUI (management console) static assets
 app.use('/gui', express.static(path.join(__dirname, 'gui-web')));
 
@@ -105,6 +151,11 @@ app.use('/gui', express.static(path.join(__dirname, 'gui-web')));
 app.use('/config', express.static(path.join(__dirname, 'gui-web')));
 app.get('/config', (req, res) => {
   res.sendFile(path.join(__dirname, 'gui-web', 'index.html'));
+});
+
+// Serve main viewer at root
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // API Authentication middleware for server mode
@@ -2683,6 +2734,52 @@ app.get('/api/slides', async (req, res) => {
   }
   
   res.json(slideFiles);
+});
+
+// API endpoint to get slide metadata (including ICC profile)
+app.get('/api/slides/:filename/metadata', async (req, res) => {
+  const filename = decodeURIComponent(req.params.filename);
+  
+  if (config.isClientMode()) {
+    // Proxy request to lab server
+    try {
+      const metadata = await labClient.getSlideMetadata(filename);
+      res.json(metadata);
+    } catch (error) {
+      res.status(503).json({ error: 'Lab server unavailable', details: error.message });
+    }
+    return;
+  }
+  // Server mode - load metadata from file system
+  try {
+    const dziDir = pathologyConfig.storage?.dziDir || config.dziDir;
+    
+    // Try organized structure first, then legacy
+    const organizedMetadataPath = path.join(dziDir, filename, 'metadata', `${filename}_metadata.json`);
+    const legacyMetadataPath = path.join(dziDir, 'metadata', `${filename}_metadata.json`);
+    
+    let metadataPath = null;
+    if (fs.existsSync(organizedMetadataPath)) {
+      metadataPath = organizedMetadataPath;
+    } else if (fs.existsSync(legacyMetadataPath)) {
+      metadataPath = legacyMetadataPath;
+    }
+    
+    if (metadataPath && fs.existsSync(metadataPath)) {
+      const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+      res.json(metadata);
+    } else {
+      // No metadata file found, return empty metadata
+      res.json({
+        colorSpace: 'unknown',
+        needsTransform: false,
+        iccProfile: null
+      });
+    }
+  } catch (error) {
+    console.error(`Error loading metadata for ${filename}:`, error);
+    res.status(500).json({ error: 'Failed to load metadata', details: error.message });
+  }
 });
 
 // DELETE endpoint for slides

@@ -16,6 +16,9 @@ document.addEventListener('DOMContentLoaded', function() {
     const sortSelect = document.getElementById('sort-select');
     const bulkActions = document.getElementById('bulk-actions');
     const bulkDeleteBtn = document.getElementById('bulk-delete-btn');
+    const colorControls = document.getElementById('color-controls');
+    const iccToggle = document.getElementById('icc-toggle');
+    const iccStatus = document.getElementById('icc-status');
     // Create a small backend host settings UI inside slide controls
     const slideControls = document.getElementById('slide-controls');
     let slides = [];
@@ -23,6 +26,7 @@ document.addEventListener('DOMContentLoaded', function() {
     let currentSlide = null;
     let currentSortBy = 'name';
     const selectedSlides = new Set();
+    let aperioICCManager = null;
 
     // Backend base configuration (supports full URL like https://path2.slidelis.com)
     function getDefaultBackendBase() {
@@ -55,6 +59,32 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     let API_BASE = getApiBase();
+
+    // ICC Color Filter removed - correction now handled server-side during conversion
+    
+    // Load slide metadata including ICC profile
+    async function loadSlideMetadata(slideName) {
+        try {
+            const response = await fetch(`${API_BASE}/api/slides/${encodeURIComponent(slideName)}/metadata`);
+            if (response.ok) {
+                const metadata = await response.json();
+                console.log(`📊 Loaded metadata for ${slideName}:`, metadata);
+                
+                // ICC profile info (server-side correction already applied to tiles)
+                if (metadata.iccProfile) {
+                    console.log(`🎨 ICC profile detected: ${metadata.iccProfile} (correction applied during conversion)`);
+                }
+                
+                return metadata;
+            } else {
+                console.warn(`Failed to load metadata for ${slideName}: ${response.status}`);
+                return null;
+            }
+        } catch (error) {
+            console.error(`Error loading metadata for ${slideName}:`, error);
+            return null;
+        }
+    }
 
     // Show/hide bulk actions based on current selection
     function updateBulkActions() {
@@ -429,10 +459,32 @@ document.addEventListener('DOMContentLoaded', function() {
                 tileSource: dziUrl
             });
             convertBtn.style.display = 'none';
+            
+            // Show color controls and load ICC metadata
+            if (colorControls) {
+                colorControls.style.display = 'block';
+            }
+
+            // Load slide metadata and initialize Aperio ICC
+            loadSlideMetadata(slide.name).then(metadata => {
+                if (metadata && aperioICCManager) {
+                    aperioICCManager.loadSlideMetadata(slide.name).then(hasICC => {
+                        // Update button to reflect actual ICC state (disabled by default)
+                        updateICCToggleButton(aperioICCManager.enabled);
+                    });
+                }
+            });
+            
         } else {
             convertBtn.style.display = 'block';
             convertBtn.textContent = `Convert ${slide.name}`;
             viewer.open([]);
+            
+            // Hide color controls for unconverted slides
+            if (colorControls) {
+                colorControls.style.display = 'none';
+            }
+            
             // No dzi yet, but still show assoc images if any
             const assoc2 = document.getElementById('assoc-images');
             if (assoc2) assoc2.style.display = (slide.labelUrl || slide.macroUrl) ? 'block' : 'none';
@@ -611,7 +663,46 @@ document.addEventListener('DOMContentLoaded', function() {
         };
     }
 
+    // Initialize Aperio-compatible ICC Manager
+    function initializeAperioICCManager() {
+        if (typeof AperioICCManager !== 'undefined') {
+            aperioICCManager = new AperioICCManager(viewer, {
+                autoDetectMonitor: true,
+                fallbackToCSS: true,
+                debugMode: false
+            });
+            
+            // Set up toggle button
+            if (iccToggle) {
+                iccToggle.onclick = () => {
+                    const enabled = aperioICCManager.toggle();
+                    updateICCToggleButton(enabled);
+                };
+            }
+            
+            console.log('✅ Aperio ICC Manager initialized');
+        } else {
+            console.warn('⚠️ Aperio ICC Manager not available');
+        }
+    }
+
+    function updateICCToggleButton(enabled) {
+        if (iccToggle && iccStatus) {
+            iccToggle.textContent = `Color Enhancement: ${enabled ? 'ON' : 'OFF'}`;
+            iccToggle.style.background = enabled ? '#28a745' : '#6c757d';
+            
+            const status = aperioICCManager?.getStatus();
+            if (status) {
+                const monitorType = status.monitorProfile?.gamut || 'sRGB';
+                iccStatus.textContent = enabled ? 
+                    `Brightness/saturation boost (${monitorType} monitor)` : 
+                    'Original slide colors';
+            }
+        }
+    }
+
     // Initialize
+    initializeAperioICCManager();
     connectWebSocket();
     loadSlides();
 });

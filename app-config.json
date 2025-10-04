@@ -49,7 +49,11 @@
     },
     "icc": {
       "enabled": true,
+      "serverSide": true,
+      "clientSide": true,
+      "extractProfile": true,
       "useEmbedded": true,
+      "aperioCompatible": true,
       "intermediateFormat": "v",
       "compression": "none",
       "quality": 85,

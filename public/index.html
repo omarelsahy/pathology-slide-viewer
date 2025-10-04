@@ -165,6 +165,15 @@
         <div id="controls">
             <h3>Pathology Slide Viewer</h3>
             <button id="convert-btn" style="display:none; margin-top:10px; padding:5px 10px; background:#007bff; color:white; border:none; border-radius:3px; cursor:pointer;">Convert to DZI</button>
+            <div id="color-controls" style="display:none; margin-top:10px; padding:8px; background:rgba(255,255,255,0.9); border-radius:3px; border:1px solid #dee2e6;">
+                <h4 style="margin:0 0 8px; font-size:13px;">Color Display</h4>
+                <button id="icc-toggle" style="padding:6px 12px; background:#6c757d; color:white; border:none; border-radius:3px; cursor:pointer; font-size:12px; margin-bottom:6px; pointer-events:auto;">Color Enhancement: OFF</button>
+                <div id="icc-status" style="font-size:11px; color:#6c757d; margin-top:4px;">Original slide colors</div>
+                <div style="font-size:10px; color:#6c757d; margin-top:6px; padding-top:6px; border-top:1px solid #e9ecef;">
+                    ℹ️ ICC color correction applied during conversion<br>
+                    Enhancement adds brightness/saturation boost
+                </div>
+            </div>
             <div id="assoc-images">
                 <h4>Associated Images</h4>
                 <div class="assoc-wrap">
@@ -182,6 +191,7 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/openseadragon/3.1.0/openseadragon.min.js"></script>
+    <script src="/js/aperio-icc-manager.js"></script>
     <script src="/js/main.js"></script>
 </body>
 </html>
