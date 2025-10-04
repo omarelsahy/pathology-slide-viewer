@@ -149,8 +149,19 @@ class OptimizedAutoProcessor extends EventEmitter {
     try {
       const status = await this.conversionClient.getConversionStatus(uniqueName);
       console.log(`[DEBUG] Conversion status for ${uniqueName}: ${JSON.stringify(status)}`);
-      if (status.status === 'processing' || status.status === 'queued' || status.status === 'completed') {
-        console.log(`[DEBUG] Skipping ${fileName} - already ${status.status}`);
+      
+      // CRITICAL FIX: Also check for 'staging' status to prevent restarting stuck conversions
+      if (status.status === 'processing' || status.status === 'queued' || 
+          status.status === 'completed' || status.status === 'staging') {
+        
+        if (status.status === 'staging') {
+          console.log(`[DEBUG] ⚠️  ${fileName} is in STAGING - cleanup service will finalize it`);
+          console.log(`[DEBUG]    Staging path: ${status.stagingPath || 'unknown'}`);
+          console.log(`[DEBUG]    Age: ${status.ageMinutes || 0} minutes`);
+        } else {
+          console.log(`[DEBUG] Skipping ${fileName} - already ${status.status}`);
+        }
+        
         this.processedFiles.add(filePath);
         return;
       }

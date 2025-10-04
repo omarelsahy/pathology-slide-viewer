@@ -1570,7 +1570,41 @@ async function performAtomicMove(baseName, convertDir, isAutoConversion = false)
   }
 }
 
-// Cleanup function to remove leftover staging directories
+// Helper function to check if staging directory has complete conversion
+function isStagingConversionComplete(stagingPath, baseName) {
+  try {
+    const dziPath = path.join(stagingPath, `${baseName}.dzi`);
+    const tilesDir = path.join(stagingPath, `${baseName}_files`);
+    const metadataDir = path.join(stagingPath, 'metadata');
+    
+    // Check if all required files/directories exist
+    const hasDzi = fs.existsSync(dziPath);
+    const hasTiles = fs.existsSync(tilesDir);
+    const hasMetadata = fs.existsSync(metadataDir);
+    
+    if (!hasDzi || !hasTiles) {
+      return { complete: false, reason: `Missing ${!hasDzi ? 'DZI file' : 'tiles directory'}` };
+    }
+    
+    // Check if tiles directory has content
+    const tilesContent = fs.readdirSync(tilesDir);
+    if (tilesContent.length === 0) {
+      return { complete: false, reason: 'Tiles directory is empty' };
+    }
+    
+    // Check if DZI file is valid (not empty and has expected content)
+    const dziStats = fs.statSync(dziPath);
+    if (dziStats.size < 100) {
+      return { complete: false, reason: 'DZI file too small (likely incomplete)' };
+    }
+    
+    return { complete: true, hasDzi, hasTiles, hasMetadata };
+  } catch (error) {
+    return { complete: false, reason: `Error checking: ${error.message}` };
+  }
+}
+
+// Enhanced cleanup function with retry logic for stuck staging directories
 function cleanupStagingDirectories() {
   try {
     const dziDir = config.dziDir;
@@ -1582,34 +1616,78 @@ function cleanupStagingDirectories() {
     );
     
     if (stagingDirectories.length > 0) {
-      console.log(`Found ${stagingDirectories.length} leftover staging directories, cleaning up...`);
+      console.log(`\n=== STAGING DIRECTORY CLEANUP ===`);
+      console.log(`Found ${stagingDirectories.length} staging directories to process\n`);
       
       stagingDirectories.forEach(dir => {
         const stagingPath = path.join(dziDir, dir.name);
-        
-        // Check if this staging directory is currently in use
         const baseName = dir.name.replace(/_convert$|_reconvert$/, '');
         const isInUse = activeConversions.has(baseName);
         
-        if (!isInUse) {
-          try {
-            // Check if directory is older than 1 hour (failed/incomplete conversions)
-            const stats = fs.statSync(stagingPath);
-            const ageInHours = (Date.now() - stats.mtime.getTime()) / (1000 * 60 * 60);
+        console.log(`📦 Checking: ${dir.name}`);
+        
+        if (isInUse) {
+          console.log(`   ✓ Active conversion - skipping\n`);
+          return;
+        }
+        
+        try {
+          // Check directory age
+          const stats = fs.statSync(stagingPath);
+          const ageInHours = (Date.now() - stats.mtime.getTime()) / (1000 * 60 * 60);
+          const ageInMinutes = (Date.now() - stats.mtime.getTime()) / (1000 * 60);
+          
+          console.log(`   📅 Age: ${ageInHours.toFixed(1)}h (${ageInMinutes.toFixed(0)} minutes)`);
+          
+          // Check if conversion appears complete
+          const completionCheck = isStagingConversionComplete(stagingPath, baseName);
+          
+          if (completionCheck.complete) {
+            // Conversion looks complete but didn't move - retry atomic move
+            console.log(`   ✅ Conversion appears COMPLETE - retrying atomic move...`);
+            console.log(`      DZI: ${completionCheck.hasDzi ? '✓' : '✗'}`);
+            console.log(`      Tiles: ${completionCheck.hasTiles ? '✓' : '✗'}`);
+            console.log(`      Metadata: ${completionCheck.hasMetadata ? '✓' : '✗'}`);
             
-            if (ageInHours > 1) {
-              fs.rmSync(stagingPath, { recursive: true, force: true });
-              console.log(`Cleaned up old staging directory: ${dir.name} (${ageInHours.toFixed(1)}h old)`);
-            } else {
-              console.log(`Skipping recent staging directory: ${dir.name} (${ageInHours.toFixed(1)}h old)`);
+            try {
+              // Retry the atomic move
+              performAtomicMove(baseName, stagingPath, false)
+                .then(() => {
+                  console.log(`   🎉 Successfully recovered and completed: ${baseName}\n`);
+                })
+                .catch(err => {
+                  console.error(`   ❌ Retry failed: ${err.message}`);
+                  // If retry fails and it's old enough, delete it
+                  if (ageInHours > 2) {
+                    fs.rmSync(stagingPath, { recursive: true, force: true });
+                    console.log(`   🗑️  Deleted failed staging directory after retry attempt\n`);
+                  }
+                });
+            } catch (error) {
+              console.error(`   ❌ Failed to retry atomic move: ${error.message}`);
+              if (ageInHours > 2) {
+                fs.rmSync(stagingPath, { recursive: true, force: true });
+                console.log(`   🗑️  Deleted after failed retry\n`);
+              }
             }
-          } catch (error) {
-            console.warn(`Failed to cleanup staging directory ${dir.name}:`, error.message);
+          } else {
+            // Conversion incomplete or corrupted
+            console.log(`   ⚠️  Conversion INCOMPLETE: ${completionCheck.reason}`);
+            
+            if (ageInMinutes > 30) {
+              // Delete incomplete conversions older than 30 minutes
+              fs.rmSync(stagingPath, { recursive: true, force: true });
+              console.log(`   🗑️  Deleted incomplete staging directory (${ageInMinutes.toFixed(0)} min old)\n`);
+            } else {
+              console.log(`   ⏳ Keeping for now (too recent, may still be processing)\n`);
+            }
           }
-        } else {
-          console.log(`Skipping active staging directory: ${dir.name}`);
+        } catch (error) {
+          console.warn(`   ❌ Error processing ${dir.name}: ${error.message}\n`);
         }
       });
+      
+      console.log(`=== CLEANUP COMPLETE ===\n`);
     }
   } catch (error) {
     console.warn('Error during staging directory cleanup:', error.message);

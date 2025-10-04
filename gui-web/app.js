@@ -1939,10 +1939,77 @@ async function updateServerStatus() {
 document.addEventListener('DOMContentLoaded', () => {
     init();
     
+    // Initialize console resizing
+    initConsoleResize();
+    
     // Update server status immediately and then every 5 seconds
     updateServerStatus();
     setInterval(updateServerStatus, 5000);
 });
+
+// Console resize functionality
+function initConsoleResize() {
+    const consoleArea = document.getElementById('consoleArea');
+    const resizeHandle = document.getElementById('consoleResizeHandle');
+    
+    if (!consoleArea || !resizeHandle) {
+        console.warn('Console resize elements not found');
+        return;
+    }
+    
+    let isResizing = false;
+    let startY = 0;
+    let startHeight = 0;
+    
+    resizeHandle.addEventListener('mousedown', (e) => {
+        isResizing = true;
+        startY = e.clientY;
+        startHeight = consoleArea.offsetHeight;
+        resizeHandle.classList.add('dragging');
+        document.body.style.cursor = 'ns-resize';
+        document.body.style.userSelect = 'none';
+        e.preventDefault();
+    });
+    
+    document.addEventListener('mousemove', (e) => {
+        if (!isResizing) return;
+        
+        // Calculate new height (drag up = bigger console)
+        const deltaY = startY - e.clientY;
+        const newHeight = startHeight + deltaY;
+        
+        // Apply constraints
+        const minHeight = 100;
+        const maxHeight = window.innerHeight - 200; // Leave space for header and some content
+        const clampedHeight = Math.max(minHeight, Math.min(newHeight, maxHeight));
+        
+        consoleArea.style.height = clampedHeight + 'px';
+    });
+    
+    document.addEventListener('mouseup', () => {
+        if (isResizing) {
+            isResizing = false;
+            resizeHandle.classList.remove('dragging');
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        }
+    });
+    
+    // Double-click to toggle between default and expanded
+    let defaultHeight = 300;
+    let isExpanded = false;
+    
+    resizeHandle.addEventListener('dblclick', () => {
+        if (isExpanded) {
+            consoleArea.style.height = defaultHeight + 'px';
+            isExpanded = false;
+        } else {
+            const expandedHeight = window.innerHeight - 250;
+            consoleArea.style.height = expandedHeight + 'px';
+            isExpanded = true;
+        }
+    });
+}
 
 // Manual function to test saving ICC settings
 window.testSaveICC = function() {

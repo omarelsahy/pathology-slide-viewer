@@ -308,7 +308,36 @@ class ConversionServer extends EventEmitter {
         });
       }
       
-      res.status(404).json({ error: 'Conversion not found' });
+      // CRITICAL FIX: Check for staging directories (incomplete but in progress)
+      // This prevents auto-processor from restarting conversions that are stuck in staging
+      const dziDir = this.centralConfig?.storage?.dziDir || os.tmpdir();
+      const stagingConvert = path.join(dziDir, `${basename}_convert`);
+      const stagingReconvert = path.join(dziDir, `${basename}_reconvert`);
+      
+      if (fs.existsSync(stagingConvert) || fs.existsSync(stagingReconvert)) {
+        const stagingPath = fs.existsSync(stagingConvert) ? stagingConvert : stagingReconvert;
+        const stats = fs.statSync(stagingPath);
+        const ageInMinutes = (Date.now() - stats.mtime.getTime()) / (1000 * 60);
+        
+        return res.json({
+          status: 'staging',
+          progress: 95,
+          phase: 'Finalizing (staging directory exists)',
+          message: 'Conversion appears complete, waiting for cleanup service to finalize',
+          stagingPath: path.basename(stagingPath),
+          ageMinutes: Math.round(ageInMinutes)
+        });
+      }
+      
+      // Check if final output exists (completed but not in completedConversions cache)
+      const finalDir = path.join(dziDir, basename);
+      if (fs.existsSync(finalDir)) {
+        // Add to completed cache for next time
+        this.completedConversions.add(basename);
+        return res.json({ status: 'completed', progress: 100 });
+      }
+      
+      res.status(404).json({ status: 'not_found', error: 'Conversion not found' });
     });
 
     // Cancel conversion
